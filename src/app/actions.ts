@@ -1,12 +1,12 @@
 'use server';
 
 import { searchMovies, TMDBMovie } from '@/lib/tmdb';
-import { drizzle } from 'drizzle-orm/better-sqlite3';
-import Database from 'better-sqlite3';
 import { users } from '@/db/schema';
 import { eq } from 'drizzle-orm';
 import { login, logout } from '@/lib/auth';
 import { redirect } from 'next/navigation';
+import { db } from '@/db';
+import { v4 as uuidv4 } from 'uuid';
 
 export async function logoutAction() {
     await logout();
@@ -20,10 +20,6 @@ export async function searchMoviesAction(query: string): Promise<TMDBMovie[]> {
 export async function loginAction(prevState: any, formData: FormData) {
     const username = formData.get('username') as string;
     const pin = formData.get('pin') as string;
-
-    const path = require('path');
-    const sqlite = new Database(path.join(process.cwd(), 'local.db'));
-    const db = drizzle(sqlite);
 
     const user = await db.select().from(users).where(eq(users.name, username)).limit(1);
 
@@ -45,11 +41,6 @@ export async function createUserAction(prevState: any, formData: FormData) {
     if (!username || !pin || pin.length !== 4) {
         return { error: 'Invalid data. PIN must be 4 digits.' };
     }
-
-    const path = require('path');
-    const sqlite = new Database(path.join(process.cwd(), 'local.db'));
-    const db = drizzle(sqlite);
-    const { v4: uuidv4 } = require('uuid');
 
     const existing = await db.select().from(users).where(eq(users.name, username));
     if (existing.length > 0) {
