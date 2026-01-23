@@ -1,16 +1,19 @@
 
-import { drizzle } from 'drizzle-orm/better-sqlite3';
-import Database from 'better-sqlite3';
+import { drizzle } from 'drizzle-orm/libsql';
+import { createClient } from '@libsql/client';
 import { users } from './schema';
 import { v4 as uuidv4 } from 'uuid';
 import { eq } from 'drizzle-orm';
 import * as dotenv from 'dotenv';
 import * as readline from 'readline';
 
-dotenv.config();
+dotenv.config({ path: '.env.local' });
 
-const sqlite = new Database('local.db');
-const db = drizzle(sqlite);
+const client = createClient({
+    url: process.env.TURSO_DATABASE_URL!,
+    authToken: process.env.TURSO_AUTH_TOKEN!,
+});
+const db = drizzle(client);
 
 const rl = readline.createInterface({
     input: process.stdin,
