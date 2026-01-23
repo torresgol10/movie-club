@@ -25,10 +25,13 @@ export const metadata: Metadata = {
       { url: "/apple-touch-icon.png", sizes: "180x180" },
     ],
   },
-  manifest: "/site.webmanifest",
   appleWebApp: {
     title: "Sala 404",
   },
+};
+
+export const viewport = {
+  themeColor: "#ffffff",
 };
 
 export default function RootLayout({
