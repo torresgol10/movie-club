@@ -37,7 +37,7 @@ export default function Dashboard() {
 
   useEffect(() => {
     loadData();
-    const interval = setInterval(loadData, 5000); // Poll every 5s for updates
+    const interval = setInterval(loadData, 30000); // Poll every 30s for updates
     return () => clearInterval(interval);
   }, []);
 
