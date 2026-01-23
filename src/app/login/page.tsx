@@ -18,7 +18,9 @@ export default function Login() {
         <div className="flex min-h-screen items-center justify-center bg-background p-4">
             <Card className="w-full max-w-md border-border bg-card shadow-lg">
                 <CardHeader className="space-y-1 text-center">
-                    <CardTitle className="text-3xl font-bold tracking-tight text-primary">MOVIE CLUB</CardTitle>
+                    <CardTitle className="flex justify-center pb-2">
+                        <img src="/sala404.svg" alt="Sala 404" className="h-16 w-auto" />
+                    </CardTitle>
                     <CardDescription>
                         Enter your credentials to access the club
                     </CardDescription>
