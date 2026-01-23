@@ -7,7 +7,7 @@ import { eq } from 'drizzle-orm';
 import * as dotenv from 'dotenv';
 import * as readline from 'readline';
 
-dotenv.config({ path: '.env.local' });
+dotenv.config({ path: '.env' });
 
 const client = createClient({
     url: process.env.TURSO_DATABASE_URL!,
