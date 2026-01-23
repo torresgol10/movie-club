@@ -60,15 +60,20 @@ export async function updateSession(request: NextRequest) {
     const session = request.cookies.get('session')?.value;
     if (!session) return;
 
-    // Refresh expiration
-    const parsed = await decrypt(session);
-    parsed.expires = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
-    const res = NextResponse.next();
-    res.cookies.set({
-        name: 'session',
-        value: await encrypt(parsed),
-        httpOnly: true,
-        expires: parsed.expires,
-    });
-    return res;
+    try {
+        // Refresh expiration
+        const parsed = await decrypt(session);
+        parsed.expires = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+        const res = NextResponse.next();
+        res.cookies.set({
+            name: 'session',
+            value: await encrypt(parsed),
+            httpOnly: true,
+            expires: parsed.expires,
+        });
+        return res;
+    } catch (error) {
+        // Session invalid
+        return null;
+    }
 }
