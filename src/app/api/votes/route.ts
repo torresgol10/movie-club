@@ -1,20 +1,15 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth';
-import { drizzle } from 'drizzle-orm/better-sqlite3';
-import Database from 'better-sqlite3';
+import { db } from '@/db';
 import { movies, votes, appState, users } from '@/db/schema';
 import { eq, and } from 'drizzle-orm';
 import { v4 as uuidv4 } from 'uuid';
-import path from 'path';
 
 export async function POST(req: NextRequest) {
     const session = await getSession();
     if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
     const { score } = await req.json();
-
-    const sqlite = new Database(path.join(process.cwd(), 'local.db'));
-    const db = drizzle(sqlite);
 
     // Get active movie
     const activeMovie = await db.select().from(movies).where(eq(movies.status, 'ACTIVE')).limit(1);

@@ -1,18 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth';
-import { drizzle } from 'drizzle-orm/better-sqlite3';
-import Database from 'better-sqlite3';
+import { db } from '@/db';
 import { movies, appState, vettingResponses, users } from '@/db/schema';
 import { eq, and } from 'drizzle-orm';
-import path from 'path';
 import { v4 as uuidv4 } from 'uuid';
 
 export async function GET(req: NextRequest) {
     const session = await getSession();
     if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-
-    const sqlite = new Database(path.join(process.cwd(), 'local.db'));
-    const db = drizzle(sqlite);
 
     // For simplicity, let's say the ACTIVE movie is the one being vetted or watched
     const activeMovie = await db.select().from(movies).where(
@@ -52,9 +47,6 @@ export async function POST(req: NextRequest) {
     if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
     const { seen } = await req.json();
-
-    const sqlite = new Database(path.join(process.cwd(), 'local.db'));
-    const db = drizzle(sqlite);
 
     // Get active movie
     const activeMovie = await db.select().from(movies).where(eq(movies.status, 'ACTIVE')).limit(1);

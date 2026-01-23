@@ -1,18 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth';
-import { drizzle } from 'drizzle-orm/better-sqlite3';
-import Database from 'better-sqlite3';
+import { db } from '@/db';
 import { movies, users, appState, votes, vettingResponses } from '@/db/schema';
 import { eq, and, ne } from 'drizzle-orm';
 import { v4 as uuidv4 } from 'uuid';
-import path from 'path';
 
 export async function GET(req: NextRequest) {
     const session = await getSession();
     if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-
-    const sqlite = new Database(path.join(process.cwd(), 'local.db'));
-    const db = drizzle(sqlite);
 
     // Get current phase
     const phaseRaw = await db.select().from(appState).where(eq(appState.key, 'current_phase')).limit(1);
@@ -81,9 +76,6 @@ export async function POST(req: NextRequest) {
     if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
     const { title, coverUrl } = await req.json();
-
-    const sqlite = new Database(path.join(process.cwd(), 'local.db'));
-    const db = drizzle(sqlite);
 
     // 1. Get Current Week
     const weekRaw = await db.select().from(appState).where(eq(appState.key, 'current_week')).limit(1);
