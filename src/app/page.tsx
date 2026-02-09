@@ -21,7 +21,7 @@ export default function Dashboard() {
   const [title, setTitle] = useState('');
   const [cover, setCover] = useState('');
   const [submitting, setSubmitting] = useState(false);
-  const [rating, setRating] = useState([5]);
+  const [ratings, setRatings] = useState<Record<string, number>>({});
   const [vettingMovie, setVettingMovie] = useState<any>(null);
   const [pendingVotes, setPendingVotes] = useState<any[]>([]);
   const [hasVetted, setHasVetted] = useState(false);
@@ -375,10 +375,18 @@ export default function Dashboard() {
                               max={10}
                               step={1}
                               className="flex-1"
-                              onValueCommit={(value) => submitVote(movie.id, value[0])}
+                              onValueChange={(value) => setRatings(prev => ({ ...prev, [movie.id]: value[0] }))}
                             />
+                            <span className="text-lg font-bold min-w-[2ch] text-center">
+                              {ratings[movie.id] ?? 5}
+                            </span>
                           </div>
-                          <p className="text-sm text-muted-foreground">Slide to rate (0-10)</p>
+                          <Button
+                            className="w-full"
+                            onClick={() => submitVote(movie.id, ratings[movie.id] ?? 5)}
+                          >
+                            Submit Vote
+                          </Button>
                         </div>
                       </div>
                     </div>
