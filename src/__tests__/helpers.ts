@@ -37,7 +37,8 @@ export function setAppState(db: TestDb, key: string, value: string) {
 }
 
 export function getAppStateValue(db: TestDb, key: string): string | null {
-    const result = db.select().from(appState).where((sql) => sql`${appState.key} = ${key}`).limit(1).all();
+    const { eq } = require('drizzle-orm');
+    const result = db.select().from(appState).where(eq(appState.key, key)).limit(1).all();
     return result[0]?.value || null;
 }
 

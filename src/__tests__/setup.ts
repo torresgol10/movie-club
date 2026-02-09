@@ -40,6 +40,7 @@ beforeEach(() => {
             proposed_by TEXT REFERENCES users(id),
             status TEXT DEFAULT 'PROPOSED',
             week_number INTEGER,
+            vetting_start_date INTEGER,
             created_at INTEGER DEFAULT (strftime('%s', 'now'))
         );
 
