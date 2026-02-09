@@ -1,11 +1,11 @@
 import { describe, it, expect } from 'vitest';
 import { eq, and, ne } from 'drizzle-orm';
 import { getTestDb } from '../setup';
-import { createTestUser, createTestMovie, setAppState } from '../helpers';
+import { createTestUser, createTestMovie, setAppState, getAppStateValue } from '../helpers';
 import { movies, users, appState } from '@/db/schema';
 import { v4 as uuidv4 } from 'uuid';
 
-describe('Use Case: Movie Submission', () => {
+describe('Use Case: Movie Submission (Decoupled Model)', () => {
     describe('Submit Movie Proposal', () => {
         it('should submit a movie proposal successfully', () => {
             const db = getTestDb();
@@ -40,11 +40,11 @@ describe('Use Case: Movie Submission', () => {
                 status: 'PROPOSED',
             });
 
-            // Check for existing pending proposal
+            // Check for existing pending proposal (new model uses COMPLETED instead of WATCHED)
             const existing = db.select().from(movies).where(
                 and(
                     eq(movies.proposedBy, user.id),
-                    ne(movies.status, 'WATCHED'),
+                    ne(movies.status, 'COMPLETED'),
                     ne(movies.status, 'REJECTED')
                 )
             ).all();
@@ -97,13 +97,13 @@ describe('Use Case: Movie Submission', () => {
 
             const allUsers = db.select().from(users).all();
             const currentBatch = db.select().from(movies).where(
-                and(ne(movies.status, 'WATCHED'), ne(movies.status, 'REJECTED'))
+                and(ne(movies.status, 'COMPLETED'), ne(movies.status, 'REJECTED'))
             ).all();
 
             expect(currentBatch.length >= allUsers.length).toBe(true);
         });
 
-        it('should set first movie as ACTIVE after batch scheduling', () => {
+        it('should set first movie as VETTING after batch scheduling', () => {
             const db = getTestDb();
             const user = createTestUser(db, { name: 'user1' });
             setAppState(db, 'current_week', '1');
@@ -114,17 +114,17 @@ describe('Use Case: Movie Submission', () => {
                 weekNumber: 1,
             });
 
-            // Simulate scheduling - first movie becomes ACTIVE
+            // Simulate scheduling - first movie starts VETTING immediately
             db.update(movies)
-                .set({ status: 'ACTIVE' })
+                .set({ status: 'VETTING' })
                 .where(eq(movies.id, movie.id))
                 .run();
 
             const result = db.select().from(movies).where(eq(movies.id, movie.id)).all();
-            expect(result[0].status).toBe('ACTIVE');
+            expect(result[0].status).toBe('VETTING');
         });
 
-        it('should assign incrementing week numbers during scheduling', () => {
+        it('should assign incrementing week numbers and vettingStartDates during scheduling', () => {
             const db = getTestDb();
             const user1 = createTestUser(db, { name: 'user1' });
             const user2 = createTestUser(db, { name: 'user2' });
@@ -133,28 +133,45 @@ describe('Use Case: Movie Submission', () => {
             const movie1 = createTestMovie(db, { proposedBy: user1.id, status: 'PROPOSED' });
             const movie2 = createTestMovie(db, { proposedBy: user2.id, status: 'PROPOSED' });
 
-            // Simulate scheduling with week assignment
-            db.update(movies).set({ weekNumber: 1, status: 'ACTIVE' }).where(eq(movies.id, movie1.id)).run();
-            db.update(movies).set({ weekNumber: 2, status: 'PROPOSED' }).where(eq(movies.id, movie2.id)).run();
+            // Simulate scheduling with week numbers and vetting dates
+            const now = new Date();
+            const nextMonday = new Date(now);
+            nextMonday.setDate(now.getDate() + ((1 + 7 - now.getDay()) % 7 || 7));
+            nextMonday.setHours(0, 0, 0, 0);
+
+            const week2Date = new Date(nextMonday);
+            week2Date.setDate(nextMonday.getDate() + 7);
+
+            db.update(movies).set({ weekNumber: 1, status: 'VETTING', vettingStartDate: nextMonday })
+                .where(eq(movies.id, movie1.id)).run();
+            db.update(movies).set({ weekNumber: 2, status: 'PROPOSED', vettingStartDate: week2Date })
+                .where(eq(movies.id, movie2.id)).run();
 
             const scheduled = db.select().from(movies).all();
             const weeks = scheduled.map(m => m.weekNumber).sort();
 
             expect(weeks).toEqual([1, 2]);
+
+            // First movie is VETTING, second stays PROPOSED
+            const m1 = db.select().from(movies).where(eq(movies.id, movie1.id)).all();
+            const m2 = db.select().from(movies).where(eq(movies.id, movie2.id)).all();
+            expect(m1[0].status).toBe('VETTING');
+            expect(m2[0].status).toBe('PROPOSED');
+            expect(m1[0].vettingStartDate).toBeDefined();
+            expect(m2[0].vettingStartDate).toBeDefined();
         });
 
-        it('should transition phase to VETTING after batch completion', () => {
+        it('should transition phase to ACTIVE after batch completion', () => {
             const db = getTestDb();
 
-            setAppState(db, 'current_phase', 'VETTING');
+            setAppState(db, 'current_phase', 'ACTIVE');
 
-            const phase = db.select().from(appState).where(eq(appState.key, 'current_phase')).all();
-            expect(phase[0].value).toBe('VETTING');
+            expect(getAppStateValue(db, 'current_phase')).toBe('ACTIVE');
         });
     });
 
     describe('Replacement Mode (After Rejection)', () => {
-        it('should only update current week slot in replacement mode', () => {
+        it('should allow user to submit replacement for rejected movie', () => {
             const db = getTestDb();
             const user1 = createTestUser(db, { name: 'user1' });
             const user2 = createTestUser(db, { name: 'user2' });
@@ -165,17 +182,17 @@ describe('Use Case: Movie Submission', () => {
             const week2Movie = createTestMovie(db, { proposedBy: user2.id, status: 'PROPOSED', weekNumber: 2 });
 
             // User1 submits replacement
-            const replacement = createTestMovie(db, { proposedBy: user1.id, status: 'ACTIVE', weekNumber: 1 });
+            const replacement = createTestMovie(db, { proposedBy: user1.id, status: 'VETTING', weekNumber: 1 });
 
             // Week 2 movie should remain unchanged
             const week2Result = db.select().from(movies).where(eq(movies.id, week2Movie.id)).all();
             expect(week2Result[0].weekNumber).toBe(2);
             expect(week2Result[0].status).toBe('PROPOSED');
 
-            // Replacement should be in week 1
+            // Replacement should be in week 1 with VETTING status
             const replacementResult = db.select().from(movies).where(eq(movies.id, replacement.id)).all();
             expect(replacementResult[0].weekNumber).toBe(1);
-            expect(replacementResult[0].status).toBe('ACTIVE');
+            expect(replacementResult[0].status).toBe('VETTING');
         });
 
         it('should preserve future scheduled movies in replacement mode', () => {
@@ -190,7 +207,7 @@ describe('Use Case: Movie Submission', () => {
             const week4Movie = createTestMovie(db, { proposedBy: user3.id, status: 'PROPOSED', weekNumber: 4 });
 
             // Simulate replacement at week 2
-            createTestMovie(db, { proposedBy: user1.id, status: 'ACTIVE', weekNumber: 2 });
+            createTestMovie(db, { proposedBy: user1.id, status: 'VETTING', weekNumber: 2 });
 
             // Future movies should be unchanged
             const futureMovies = db.select().from(movies)
@@ -200,6 +217,45 @@ describe('Use Case: Movie Submission', () => {
             expect(futureMovies).toHaveLength(2);
             expect(futureMovies.find(m => m.weekNumber === 3)).toBeDefined();
             expect(futureMovies.find(m => m.weekNumber === 4)).toBeDefined();
+        });
+    });
+
+    describe('Coexisting Movie States', () => {
+        it('should allow movies in different states simultaneously', () => {
+            const db = getTestDb();
+            const user1 = createTestUser(db, { name: 'user1' });
+            const user2 = createTestUser(db, { name: 'user2' });
+            const user3 = createTestUser(db, { name: 'user3' });
+            const user4 = createTestUser(db, { name: 'user4' });
+
+            // Multiple movies in different states at the same time
+            createTestMovie(db, { proposedBy: user1.id, status: 'COMPLETED', weekNumber: 1 });
+            createTestMovie(db, { proposedBy: user2.id, status: 'WATCHING', weekNumber: 2 });
+            createTestMovie(db, { proposedBy: user3.id, status: 'VETTING', weekNumber: 3 });
+            createTestMovie(db, { proposedBy: user4.id, status: 'PROPOSED', weekNumber: 4 });
+
+            const completed = db.select().from(movies).where(eq(movies.status, 'COMPLETED')).all();
+            const watching = db.select().from(movies).where(eq(movies.status, 'WATCHING')).all();
+            const vetting = db.select().from(movies).where(eq(movies.status, 'VETTING')).all();
+            const proposed = db.select().from(movies).where(eq(movies.status, 'PROPOSED')).all();
+
+            expect(completed).toHaveLength(1);
+            expect(watching).toHaveLength(1);
+            expect(vetting).toHaveLength(1);
+            expect(proposed).toHaveLength(1);
+        });
+
+        it('should show COMPLETED movies in history', () => {
+            const db = getTestDb();
+            const user = createTestUser(db, { name: 'user1' });
+
+            createTestMovie(db, { title: 'Old Movie', proposedBy: user.id, status: 'COMPLETED', weekNumber: 1 });
+            createTestMovie(db, { title: 'Current', proposedBy: user.id, status: 'WATCHING', weekNumber: 2 });
+
+            const history = db.select().from(movies).where(eq(movies.status, 'COMPLETED')).all();
+
+            expect(history).toHaveLength(1);
+            expect(history[0].title).toBe('Old Movie');
         });
     });
 });

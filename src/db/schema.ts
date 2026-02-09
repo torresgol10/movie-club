@@ -20,10 +20,13 @@ export const movies = sqliteTable('movies', {
     // Who proposed it directly or essentially who owns this slot
     proposedBy: text('proposed_by').references(() => users.id),
 
-    // Status: PROPOSED (in batch), ACTIVE (current week), WATCHED, REJECTED
+    // Status: PROPOSED (in batch), VETTING (ready for vetting), WATCHING (passed vetting, watching), COMPLETED (watched and fully voted), REJECTED
     status: text('status').default('PROPOSED'),
 
     weekNumber: integer('week_number'), // Assigned during scheduling
+
+    // When vetting opens for this movie (scheduled date, e.g., every Monday)
+    vettingStartDate: integer('vetting_start_date', { mode: 'timestamp' }),
 
     createdAt: integer('created_at', { mode: 'timestamp' }).default(sql`CURRENT_TIMESTAMP`),
 });

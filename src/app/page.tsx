@@ -21,10 +21,11 @@ export default function Dashboard() {
   const [title, setTitle] = useState('');
   const [cover, setCover] = useState('');
   const [submitting, setSubmitting] = useState(false);
-  const [rating, setRating] = useState([5]);
-  const [activeMovie, setActiveMovie] = useState<any>(null);
+  const [ratings, setRatings] = useState<Record<string, number>>({});
+  const [vettingMovie, setVettingMovie] = useState<any>(null);
+  const [pendingVotes, setPendingVotes] = useState<any[]>([]);
   const [hasVetted, setHasVetted] = useState(false);
-  const [vettingProgress, setVettingProgress] = useState<{ responded: number; total: number } | null>(null);
+  const [pendingVetters, setPendingVetters] = useState<any[]>([]);
   const [createState, createAction, isCreating] = useActionState(createUserAction, null);
   const [open, setOpen] = useState(false);
 
@@ -49,16 +50,24 @@ export default function Dashboard() {
       setData(json);
       setLoading(false);
 
-      // If Vetting, fetch active movie and vetting status
-      if (json.state.phase === 'VETTING' || json.state.phase === 'WATCHING') {
-        const mRes = await fetch('/api/vetting');
-        const mJson = await mRes.json();
-        setActiveMovie(mJson.movie);
-        setHasVetted(mJson.hasVetted || false);
-        setVettingProgress(mJson.vettingProgress || null);
+      // If in ACTIVE phase, fetch vetting movie and pending votes
+      if (json.state.phase === 'ACTIVE') {
+        // Fetch vetting movie
+        const vettingRes = await fetch('/api/vetting');
+        const vettingJson = await vettingRes.json();
+        setVettingMovie(vettingJson.movie);
+        setHasVetted(vettingJson.hasVetted || false);
+        setPendingVetters(vettingJson.pendingUsers || []);
+
+        // Fetch pending votes
+        const votesRes = await fetch('/api/votes');
+        const votesJson = await votesRes.json();
+        setPendingVotes(votesJson.pendingVotes || []);
       } else {
+        setVettingMovie(null);
         setHasVetted(false);
-        setVettingProgress(null);
+        setPendingVetters([]);
+        setPendingVotes([]);
       }
     } catch (e) {
       console.error(e);
@@ -96,10 +105,10 @@ export default function Dashboard() {
     loadData();
   }
 
-  async function submitVote() {
+  async function submitVote(movieId: string, score: number) {
     await fetch('/api/votes', {
       method: 'POST',
-      body: JSON.stringify({ score: rating[0] })
+      body: JSON.stringify({ movieId, score })
     });
     loadData();
     alert('Vote Cast!');
@@ -272,110 +281,132 @@ export default function Dashboard() {
         </div>
       )}
 
-      {state.phase === 'VETTING' && activeMovie && (
-        <div className="space-y-8 animate-in fade-in duration-500 text-center">
-          <div className="space-y-2">
-            <p className="text-muted-foreground uppercase tracking-widest text-sm">Week {state.week} SelectionCandidate</p>
-            <h1 className="text-4xl font-extrabold lg:text-6xl">{activeMovie.title}</h1>
-          </div>
+      {state.phase === 'ACTIVE' && (
+        <div className="space-y-8 animate-in fade-in duration-500">
+          {/* Vetting Section */}
+          {vettingMovie && (
+            <Card className="border-primary/50">
+              <CardHeader>
+                <CardTitle>Movie Vetting - Week {state.week}</CardTitle>
+                <CardDescription>Have you seen this movie before?</CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="flex flex-col md:flex-row gap-6">
+                  {vettingMovie.coverUrl && (
+                    <img
+                      src={vettingMovie.coverUrl}
+                      className="rounded-lg shadow-xl max-w-[200px]"
+                      alt={vettingMovie.title}
+                    />
+                  )}
+                  <div className="flex-1 space-y-4">
+                    <h2 className="text-2xl font-bold">{vettingMovie.title}</h2>
 
-          {activeMovie.coverUrl && (
-            <div className="relative mx-auto w-fit">
-              <img
-                src={activeMovie.coverUrl}
-                className="rounded-xl shadow-2xl max-w-[300px] hover:scale-105 transition-transform duration-300"
-              />
-              <div className="absolute inset-0 rounded-xl ring-1 ring-inset ring-white/10"></div>
+                    {hasVetted ? (
+                      <div className="space-y-4">
+                        <p className="text-sm text-muted-foreground animate-pulse">
+                          ✓ Your response has been recorded
+                        </p>
+                        {pendingVetters.length > 0 && (
+                          <div className="space-y-2">
+                            <p className="text-sm font-medium">Waiting for:</p>
+                            <div className="flex flex-wrap gap-2">
+                              {pendingVetters.map((user: any) => (
+                                <Badge key={user.id} variant="outline">{user.name}</Badge>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    ) : (
+                      <div className="grid grid-cols-2 gap-4">
+                        <Button variant="secondary" onClick={() => submitVetting(false)} className="h-16">
+                          No, Never
+                        </Button>
+                        <Button variant="destructive" onClick={() => submitVetting(true)} className="h-16">
+                          Yes, I have
+                        </Button>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+          )}
+
+          {/* Pending Votes Section */}
+          {pendingVotes.length > 0 && (
+            <div className="space-y-4">
+              <h2 className="text-2xl font-bold">Pending Votes</h2>
+              <p className="text-muted-foreground">Rate these movies you've watched</p>
+
+              {pendingVotes.map((movie: any) => (
+                <Card key={movie.id}>
+                  <CardContent className="pt-6">
+                    <div className="flex flex-col md:flex-row gap-6">
+                      {movie.coverUrl && (
+                        <img
+                          src={movie.coverUrl}
+                          className="rounded-lg shadow-xl max-w-[150px]"
+                          alt={movie.title}
+                        />
+                      )}
+                      <div className="flex-1 space-y-4">
+                        <div>
+                          <h3 className="text-xl font-bold">{movie.title}</h3>
+                          <p className="text-sm text-muted-foreground">Week {movie.weekNumber}</p>
+                        </div>
+
+                        {movie.pendingUsers && movie.pendingUsers.length > 0 && (
+                          <div className="space-y-2">
+                            <p className="text-sm font-medium">Still pending from:</p>
+                            <div className="flex flex-wrap gap-2">
+                              {movie.pendingUsers.map((user: any) => (
+                                <Badge key={user.id} variant="outline">{user.name}</Badge>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+
+                        <div className="space-y-4">
+                          <div className="flex items-center gap-4">
+                            <Slider
+                              defaultValue={[5]}
+                              max={10}
+                              step={1}
+                              className="flex-1"
+                              onValueChange={(value) => setRatings(prev => ({ ...prev, [movie.id]: value[0] }))}
+                            />
+                            <span className="text-lg font-bold min-w-[2ch] text-center">
+                              {ratings[movie.id] ?? 5}
+                            </span>
+                          </div>
+                          <Button
+                            className="w-full"
+                            onClick={() => submitVote(movie.id, ratings[movie.id] ?? 5)}
+                          >
+                            Submit Vote
+                          </Button>
+                        </div>
+                      </div>
+                    </div>
+                  </CardContent>
+                </Card>
+              ))}
             </div>
           )}
 
-          <Card className="max-w-md mx-auto">
-            <CardHeader>
-              <CardTitle>{hasVetted ? 'Waiting for Others' : 'Vetting Process'}</CardTitle>
-              <CardDescription>
-                {hasVetted
-                  ? 'You have confirmed you haven\'t seen this movie. Waiting for other members...'
-                  : 'Have you seen this movie before?'}
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
-              {hasVetted ? (
-                <div className="space-y-4">
-                  <div className="flex justify-between text-sm font-medium">
-                    <span>Vetting Progress</span>
-                    <span>{vettingProgress?.responded || 0} / {vettingProgress?.total || 0}</span>
-                  </div>
-                  <Progress value={vettingProgress ? (vettingProgress.responded / vettingProgress.total) * 100 : 0} className="h-2" />
-                  <p className="text-center text-sm text-muted-foreground animate-pulse">
-                    ✓ Your response has been recorded
-                  </p>
-                </div>
-              ) : (
-                <div className="grid grid-cols-2 gap-4">
-                  <Button variant="secondary" onClick={() => submitVetting(false)} className="h-16 text-lg">
-                    No, Never
-                  </Button>
-                  <Button variant="destructive" onClick={() => submitVetting(true)} className="h-16 text-lg">
-                    Yes, I have
-                  </Button>
-                </div>
-              )}
-            </CardContent>
-          </Card>
+          {!vettingMovie && pendingVotes.length === 0 && (
+            <Card>
+              <CardContent className="pt-6 text-center text-muted-foreground">
+                <p>No pending actions. All caught up!</p>
+              </CardContent>
+            </Card>
+          )}
         </div>
       )}
 
-      {state.phase === 'WATCHING' && activeMovie && (
-        <div className="space-y-8 animate-in fade-in duration-500">
-          <Card className="overflow-hidden">
-            <div className="grid md:grid-cols-2 gap-6 p-6">
-              <div className="flex flex-col justify-center items-center space-y-6">
-                {activeMovie.coverUrl && (
-                  <img
-                    src={activeMovie.coverUrl}
-                    className="rounded-lg shadow-xl max-w-[250px]"
-                  />
-                )}
-              </div>
-
-              <div className="flex flex-col justify-center space-y-6">
-                <div>
-                  <h2 className="text-sm font-medium text-muted-foreground uppercase tracking-wider mb-2">Now Showing</h2>
-                  <h1 className="text-3xl font-bold md:text-5xl">{activeMovie.title}</h1>
-                </div>
-
-                <Separator />
-
-                <div className="space-y-6">
-                  <div className="space-y-2">
-                    <h3 className="font-semibold text-lg">Rate this Movie</h3>
-                    <p className="text-muted-foreground text-sm">Vote 0-10 when you have finished watching.</p>
-                  </div>
-
-                  <div className="space-y-4">
-                    <div className="flex items-center gap-4">
-                      <Slider
-                        value={rating}
-                        onValueChange={setRating}
-                        max={10}
-                        step={1}
-                        className="flex-1"
-                      />
-                      <span className="text-3xl font-bold w-12 text-center">{rating[0]}</span>
-                    </div>
-
-                    <Button onClick={submitVote} size="lg" className="w-full">
-                      Submit Vote
-                    </Button>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </Card>
-        </div>
-      )}
-
-      {state.phase !== 'SUBMISSION' && state.phase !== 'VETTING' && state.phase !== 'WATCHING' && (
+      {state.phase !== 'SUBMISSION' && state.phase !== 'ACTIVE' && (
         <div className="flex items-center justify-center min-h-[50vh]">
           <h1 className="text-2xl text-muted-foreground">Phase: {state.phase}</h1>
         </div>

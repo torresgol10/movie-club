@@ -1,16 +1,16 @@
 import { describe, it, expect } from 'vitest';
 import { eq, and } from 'drizzle-orm';
 import { getTestDb } from '../setup';
-import { createTestUser, createTestMovie, setAppState, createVote } from '../helpers';
+import { createTestUser, createTestMovie, setAppState, createVote, getAppStateValue } from '../helpers';
 import { movies, votes, users, appState } from '@/db/schema';
 
-describe('Use Case: Voting Process', () => {
-    describe('Record Vote', () => {
-        it('should record vote for active movie', () => {
+describe('Use Case: Voting Process (Decoupled Model)', () => {
+    describe('Record Vote for Specific Movie', () => {
+        it('should record vote for a specific WATCHING movie', () => {
             const db = getTestDb();
             const proposer = createTestUser(db, { name: 'proposer' });
             const voter = createTestUser(db, { name: 'voter' });
-            const movie = createTestMovie(db, { proposedBy: proposer.id, status: 'ACTIVE' });
+            const movie = createTestMovie(db, { proposedBy: proposer.id, status: 'WATCHING' });
 
             createVote(db, movie.id, voter.id, 8);
 
@@ -31,7 +31,7 @@ describe('Use Case: Voting Process', () => {
             const voter1 = createTestUser(db, { name: 'voter1' });
             const voter2 = createTestUser(db, { name: 'voter2' });
             const voter3 = createTestUser(db, { name: 'voter3' });
-            const movie = createTestMovie(db, { proposedBy: proposer.id, status: 'ACTIVE' });
+            const movie = createTestMovie(db, { proposedBy: proposer.id, status: 'WATCHING' });
 
             createVote(db, movie.id, voter1.id, 0);  // Min score
             createVote(db, movie.id, voter2.id, 10); // Max score
@@ -43,22 +43,112 @@ describe('Use Case: Voting Process', () => {
             expect(allVotes.map(v => v.score).sort((a, b) => (a ?? 0) - (b ?? 0))).toEqual([0, 5, 10]);
         });
 
-        it('should reject vote when no active movie', () => {
-            const db = getTestDb();
-
-            const activeMovies = db.select().from(movies).where(eq(movies.status, 'ACTIVE')).all();
-
-            expect(activeMovies).toHaveLength(0);
-            // This would trigger error: 'No active movie'
-        });
-    });
-
-    describe('Voting Completion & Week Transition', () => {
-        it('should mark movie as WATCHED when all users vote', () => {
+        it('should allow voting on multiple movies independently', () => {
             const db = getTestDb();
             const user1 = createTestUser(db, { name: 'user1' });
             const user2 = createTestUser(db, { name: 'user2' });
-            const movie = createTestMovie(db, { proposedBy: user1.id, status: 'ACTIVE' });
+            const movie1 = createTestMovie(db, { proposedBy: user1.id, status: 'WATCHING', weekNumber: 1 });
+            const movie2 = createTestMovie(db, { proposedBy: user2.id, status: 'WATCHING', weekNumber: 2 });
+
+            // User1 votes on both movies
+            createVote(db, movie1.id, user1.id, 7);
+            createVote(db, movie2.id, user1.id, 9);
+
+            const user1Votes = db.select().from(votes)
+                .where(eq(votes.userId, user1.id)).all();
+
+            expect(user1Votes).toHaveLength(2);
+            expect(user1Votes.find(v => v.movieId === movie1.id)?.score).toBe(7);
+            expect(user1Votes.find(v => v.movieId === movie2.id)?.score).toBe(9);
+        });
+
+        it('should only allow voting on WATCHING movies', () => {
+            const db = getTestDb();
+            const user = createTestUser(db, { name: 'user1' });
+
+            const proposedMovie = createTestMovie(db, { proposedBy: user.id, status: 'PROPOSED' });
+            const vettingMovie = createTestMovie(db, { proposedBy: user.id, status: 'VETTING' });
+            const watchingMovie = createTestMovie(db, { proposedBy: user.id, status: 'WATCHING' });
+
+            // Only watchingMovie should be available for voting
+            const votableMovies = db.select().from(movies)
+                .where(eq(movies.status, 'WATCHING')).all();
+
+            expect(votableMovies).toHaveLength(1);
+            expect(votableMovies[0].id).toBe(watchingMovie.id);
+        });
+    });
+
+    describe('Pending Votes Per User', () => {
+        it('should return movies user has not voted on yet', () => {
+            const db = getTestDb();
+            const user1 = createTestUser(db, { name: 'user1' });
+            const user2 = createTestUser(db, { name: 'user2' });
+            const movie1 = createTestMovie(db, { proposedBy: user1.id, status: 'WATCHING', weekNumber: 1 });
+            const movie2 = createTestMovie(db, { proposedBy: user2.id, status: 'WATCHING', weekNumber: 2 });
+
+            // User1 votes on movie1 only
+            createVote(db, movie1.id, user1.id, 8);
+
+            // Get pending votes for user1
+            const watchingMovies = db.select().from(movies)
+                .where(eq(movies.status, 'WATCHING')).all();
+            const pendingForUser1 = watchingMovies.filter(movie => {
+                const voted = db.select().from(votes)
+                    .where(and(eq(votes.movieId, movie.id), eq(votes.userId, user1.id))).all();
+                return voted.length === 0;
+            });
+
+            expect(pendingForUser1).toHaveLength(1);
+            expect(pendingForUser1[0].id).toBe(movie2.id);
+        });
+
+        it('should return empty when user has voted on all WATCHING movies', () => {
+            const db = getTestDb();
+            const user1 = createTestUser(db, { name: 'user1' });
+            const user2 = createTestUser(db, { name: 'user2' });
+            const movie = createTestMovie(db, { proposedBy: user2.id, status: 'WATCHING' });
+
+            createVote(db, movie.id, user1.id, 7);
+
+            const watchingMovies = db.select().from(movies)
+                .where(eq(movies.status, 'WATCHING')).all();
+            const pendingForUser1 = watchingMovies.filter(movie => {
+                const voted = db.select().from(votes)
+                    .where(and(eq(votes.movieId, movie.id), eq(votes.userId, user1.id))).all();
+                return voted.length === 0;
+            });
+
+            expect(pendingForUser1).toHaveLength(0);
+        });
+
+        it('should show which users have not voted on a specific movie', () => {
+            const db = getTestDb();
+            const user1 = createTestUser(db, { name: 'user1' });
+            const user2 = createTestUser(db, { name: 'user2' });
+            const user3 = createTestUser(db, { name: 'user3' });
+            const movie = createTestMovie(db, { proposedBy: user1.id, status: 'WATCHING' });
+
+            // Only user1 has voted
+            createVote(db, movie.id, user1.id, 7);
+
+            const allUsers = db.select().from(users).all();
+            const votesForMovie = db.select().from(votes)
+                .where(eq(votes.movieId, movie.id)).all();
+            const votedUserIds = new Set(votesForMovie.map(v => v.userId));
+            const pendingUsers = allUsers.filter(u => !votedUserIds.has(u.id));
+
+            expect(pendingUsers).toHaveLength(2);
+            expect(pendingUsers.map(u => u.name).sort()).toEqual(['user2', 'user3']);
+        });
+    });
+
+    describe('Voting Completion & Movie Status', () => {
+        it('should mark movie as COMPLETED when all users vote', () => {
+            const db = getTestDb();
+            const user1 = createTestUser(db, { name: 'user1' });
+            const user2 = createTestUser(db, { name: 'user2' });
+            const movie = createTestMovie(db, { proposedBy: user1.id, status: 'WATCHING' });
 
             // Both users vote
             createVote(db, movie.id, user1.id, 7);
@@ -70,97 +160,88 @@ describe('Use Case: Voting Process', () => {
             // Check if voting is complete
             if (allVotes.length >= allUsers.length) {
                 db.update(movies)
-                    .set({ status: 'WATCHED' })
+                    .set({ status: 'COMPLETED' })
                     .where(eq(movies.id, movie.id))
                     .run();
             }
 
             const result = db.select().from(movies).where(eq(movies.id, movie.id)).all();
-            expect(result[0].status).toBe('WATCHED');
+            expect(result[0].status).toBe('COMPLETED');
         });
 
-        it('should increment week counter after voting completes', () => {
-            const db = getTestDb();
-            setAppState(db, 'current_week', '3');
-
-            // Simulate week increment after voting completes
-            const currentWeek = parseInt(
-                db.select().from(appState).where(eq(appState.key, 'current_week')).all()[0]?.value || '1'
-            );
-            const nextWeek = currentWeek + 1;
-
-            setAppState(db, 'current_week', String(nextWeek));
-
-            const week = db.select().from(appState).where(eq(appState.key, 'current_week')).all();
-            expect(week[0].value).toBe('4');
-        });
-
-        it('should activate next weeks movie if available', () => {
+        it('should NOT complete movie when only some users voted', () => {
             const db = getTestDb();
             const user1 = createTestUser(db, { name: 'user1' });
             const user2 = createTestUser(db, { name: 'user2' });
-            setAppState(db, 'current_week', '2');
+            const user3 = createTestUser(db, { name: 'user3' });
+            const movie = createTestMovie(db, { proposedBy: user1.id, status: 'WATCHING' });
 
-            // Current movie at week 1 (would be WATCHED)
-            createTestMovie(db, { proposedBy: user1.id, status: 'WATCHED', weekNumber: 1 });
+            // Only 2 of 3 users vote
+            createVote(db, movie.id, user1.id, 7);
+            createVote(db, movie.id, user2.id, 9);
 
-            // Next movie at week 2
-            const nextMovie = createTestMovie(db, { proposedBy: user2.id, status: 'PROPOSED', weekNumber: 2 });
+            const allUsers = db.select().from(users).all();
+            const allVotes = db.select().from(votes).where(eq(votes.movieId, movie.id)).all();
 
-            // Simulate activation of next week's movie
-            const nextWeekMovie = db.select().from(movies).where(
-                and(
-                    eq(movies.weekNumber, 2),
-                    eq(movies.status, 'PROPOSED')
-                )
-            ).all();
-
-            if (nextWeekMovie.length > 0) {
-                db.update(movies)
-                    .set({ status: 'ACTIVE' })
-                    .where(eq(movies.id, nextWeekMovie[0].id))
-                    .run();
-
-                setAppState(db, 'current_phase', 'VETTING');
+            if (allVotes.length >= allUsers.length) {
+                db.update(movies).set({ status: 'COMPLETED' }).where(eq(movies.id, movie.id)).run();
             }
 
-            const result = db.select().from(movies).where(eq(movies.id, nextMovie.id)).all();
-            expect(result[0].status).toBe('ACTIVE');
-
-            const phase = db.select().from(appState).where(eq(appState.key, 'current_phase')).all();
-            expect(phase[0].value).toBe('VETTING');
+            const result = db.select().from(movies).where(eq(movies.id, movie.id)).all();
+            expect(result[0].status).toBe('WATCHING'); // Still watching, not completed
         });
 
-        it('should return to SUBMISSION phase when no next movie', () => {
+        it('should return to SUBMISSION when all movies are COMPLETED', () => {
             const db = getTestDb();
-            setAppState(db, 'current_week', '5');
+            setAppState(db, 'current_phase', 'ACTIVE');
 
-            // No movie for week 5
-            const nextWeekMovies = db.select().from(movies).where(
-                and(
-                    eq(movies.weekNumber, 5),
-                    eq(movies.status, 'PROPOSED')
-                )
-            ).all();
+            const user1 = createTestUser(db, { name: 'user1' });
+            const user2 = createTestUser(db, { name: 'user2' });
+            const movie1 = createTestMovie(db, { proposedBy: user1.id, status: 'COMPLETED', weekNumber: 1 });
+            const movie2 = createTestMovie(db, { proposedBy: user2.id, status: 'COMPLETED', weekNumber: 2 });
 
-            if (nextWeekMovies.length === 0) {
+            // Check if any movies still in progress
+            const anyActive = db.select().from(movies)
+                .where(eq(movies.status, 'PROPOSED')).all()
+                .concat(db.select().from(movies).where(eq(movies.status, 'VETTING')).all())
+                .concat(db.select().from(movies).where(eq(movies.status, 'WATCHING')).all());
+
+            if (anyActive.length === 0) {
                 setAppState(db, 'current_phase', 'SUBMISSION');
+                setAppState(db, 'current_week', '0');
             }
 
-            const phase = db.select().from(appState).where(eq(appState.key, 'current_phase')).all();
-            expect(phase[0].value).toBe('SUBMISSION');
+            expect(getAppStateValue(db, 'current_phase')).toBe('SUBMISSION');
+            expect(getAppStateValue(db, 'current_week')).toBe('0');
+        });
+
+        it('should stay in ACTIVE when other movies are still pending', () => {
+            const db = getTestDb();
+            setAppState(db, 'current_phase', 'ACTIVE');
+
+            const user1 = createTestUser(db, { name: 'user1' });
+            const user2 = createTestUser(db, { name: 'user2' });
+            createTestMovie(db, { proposedBy: user1.id, status: 'COMPLETED', weekNumber: 1 });
+            createTestMovie(db, { proposedBy: user2.id, status: 'WATCHING', weekNumber: 2 }); // still watching
+
+            const anyActive = db.select().from(movies)
+                .where(eq(movies.status, 'WATCHING')).all();
+
+            // Still has active movies
+            expect(anyActive.length).toBeGreaterThan(0);
+            expect(getAppStateValue(db, 'current_phase')).toBe('ACTIVE');
         });
     });
 
     describe('Average Score Calculation', () => {
-        it('should calculate average score for watched movie', () => {
+        it('should calculate average score for completed movie', () => {
             const db = getTestDb();
             const proposer = createTestUser(db, { name: 'proposer' });
             const voter1 = createTestUser(db, { name: 'voter1' });
             const voter2 = createTestUser(db, { name: 'voter2' });
             const voter3 = createTestUser(db, { name: 'voter3' });
 
-            const movie = createTestMovie(db, { proposedBy: proposer.id, status: 'WATCHED' });
+            const movie = createTestMovie(db, { proposedBy: proposer.id, status: 'COMPLETED' });
 
             createVote(db, movie.id, voter1.id, 7);
             createVote(db, movie.id, voter2.id, 8);
@@ -176,7 +257,7 @@ describe('Use Case: Voting Process', () => {
         it('should return null average for movie with no votes', () => {
             const db = getTestDb();
             const user = createTestUser(db, { name: 'proposer' });
-            const movie = createTestMovie(db, { proposedBy: user.id, status: 'WATCHED' });
+            const movie = createTestMovie(db, { proposedBy: user.id, status: 'COMPLETED' });
 
             const movieVotes = db.select().from(votes).where(eq(votes.movieId, movie.id)).all();
 
