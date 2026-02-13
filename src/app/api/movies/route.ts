@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getSessionUser } from '@/lib/auth';
 import { db } from '@/db';
 import { movies, users, votes } from '@/db/schema';
-import { eq, and, ne } from 'drizzle-orm';
+import { eq, and, ne, isNull, or } from 'drizzle-orm';
 import { submitMovie, getAppState } from '@/lib/state-machine';
 
 export async function GET(req: NextRequest) {
@@ -11,18 +11,23 @@ export async function GET(req: NextRequest) {
 
     // Use getAppState() so the week auto-advances based on the schedule
     const { phase, week } = await getAppState();
+    const submissionWeekCondition = week > 0
+        ? eq(movies.weekNumber, week)
+        : or(isNull(movies.weekNumber), eq(movies.weekNumber, 0));
 
     // Get my submission
     const mySubmission = await db.select().from(movies).where(and(
         eq(movies.proposedBy, sessionUser.id),
         ne(movies.status, 'COMPLETED'),
-        ne(movies.status, 'REJECTED')
+        ne(movies.status, 'REJECTED'),
+        submissionWeekCondition
     )).limit(1);
 
     // Rejected submission for the current week (so the user can re-submit)
     const rejectedSubmission = await db.select().from(movies).where(and(
         eq(movies.proposedBy, sessionUser.id),
-        eq(movies.status, 'REJECTED')
+        eq(movies.status, 'REJECTED'),
+        eq(movies.weekNumber, week)
     )).orderBy(movies.weekNumber).limit(1);
 
     // Get stats

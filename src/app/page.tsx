@@ -52,7 +52,17 @@ export default function Dashboard() {
       setData(json);
       setLoading(false);
 
-      // If in ACTIVE phase, fetch vetting movie and pending votes
+      // Votes can remain pending even during SUBMISSION (replacement flow)
+      const votesRes = await fetch('/api/votes');
+      const votesJson = await votesRes.json();
+      const voted = votesJson.votedVotes || [];
+      const votedIds = new Set(voted.map((movie: any) => movie.id));
+      const pending = (votesJson.pendingVotes || []).filter((movie: any) => !votedIds.has(movie.id));
+
+      setPendingVotes(pending);
+      setVotedVotes(voted);
+
+      // Vetting only exists in ACTIVE phase
       if (json.state.phase === 'ACTIVE') {
         // Fetch vetting movie
         const vettingRes = await fetch('/api/vetting');
@@ -60,22 +70,10 @@ export default function Dashboard() {
         setVettingMovie(vettingJson.movie);
         setHasVetted(vettingJson.hasVetted || false);
         setPendingVetters(vettingJson.pendingUsers || []);
-
-        // Fetch pending votes
-        const votesRes = await fetch('/api/votes');
-        const votesJson = await votesRes.json();
-        const voted = votesJson.votedVotes || [];
-        const votedIds = new Set(voted.map((movie: any) => movie.id));
-        const pending = (votesJson.pendingVotes || []).filter((movie: any) => !votedIds.has(movie.id));
-
-        setPendingVotes(pending);
-        setVotedVotes(voted);
       } else {
         setVettingMovie(null);
         setHasVetted(false);
         setPendingVetters([]);
-        setPendingVotes([]);
-        setVotedVotes([]);
       }
     } catch (e) {
       console.error(e);
@@ -469,6 +467,118 @@ export default function Dashboard() {
                 <p>No pending actions. All caught up!</p>
               </CardContent>
             </Card>
+          )}
+        </div>
+      )}
+
+      {state.phase === 'SUBMISSION' && (pendingVotes.length > 0 || votedVotes.length > 0) && (
+        <div className="space-y-8 animate-in fade-in duration-500">
+          {pendingVotes.length > 0 && (
+            <div className="space-y-4">
+              <h2 className="text-2xl font-bold">Pending Votes</h2>
+              <p className="text-muted-foreground">Rate these movies you've watched</p>
+
+              {pendingVotes.map((movie: any) => (
+                <Card key={movie.id}>
+                  <CardContent className="pt-6">
+                    <div className="flex flex-col md:flex-row gap-6">
+                      {movie.coverUrl && (
+                        <img
+                          src={movie.coverUrl}
+                          className="rounded-lg shadow-xl max-w-[150px]"
+                          alt={movie.title}
+                        />
+                      )}
+                      <div className="flex-1 space-y-4">
+                        <div>
+                          <h3 className="text-xl font-bold">{movie.title}</h3>
+                          <p className="text-sm text-muted-foreground">Week {movie.weekNumber}</p>
+                        </div>
+
+                        {movie.pendingUsers && movie.pendingUsers.length > 0 && (
+                          <div className="space-y-2">
+                            <p className="text-sm font-medium">Still pending from:</p>
+                            <div className="flex flex-wrap gap-2">
+                              {movie.pendingUsers.map((user: any) => (
+                                <Badge key={user.id} variant="outline">{user.name}</Badge>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+
+                        <div className="space-y-4">
+                          <div className="flex items-center gap-4">
+                            <Slider
+                              defaultValue={[5]}
+                              max={10}
+                              step={1}
+                              className="flex-1"
+                              onValueChange={(value) => setRatings(prev => ({ ...prev, [movie.id]: value[0] }))}
+                            />
+                            <span className="text-lg font-bold min-w-[2ch] text-center">
+                              {ratings[movie.id] ?? 5}
+                            </span>
+                          </div>
+                          <Button
+                            className="w-full"
+                            onClick={() => submitVote(movie.id, ratings[movie.id] ?? 5)}
+                          >
+                            Submit Vote
+                          </Button>
+                        </div>
+                      </div>
+                    </div>
+                  </CardContent>
+                </Card>
+              ))}
+            </div>
+          )}
+
+          {votedVotes.length > 0 && (
+            <div className="space-y-4">
+              <h2 className="text-2xl font-bold">Votos enviados</h2>
+              <p className="text-muted-foreground">Seguimiento de media y votos pendientes</p>
+
+              {votedVotes.map((movie: any) => (
+                <Card key={movie.id}>
+                  <CardContent className="pt-6">
+                    <div className="flex flex-col md:flex-row gap-6">
+                      {movie.coverUrl && (
+                        <img
+                          src={movie.coverUrl}
+                          className="rounded-lg shadow-xl max-w-[150px]"
+                          alt={movie.title}
+                        />
+                      )}
+                      <div className="flex-1 space-y-4">
+                        <div>
+                          <h3 className="text-xl font-bold">{movie.title}</h3>
+                          <p className="text-sm text-muted-foreground">Week {movie.weekNumber}</p>
+                        </div>
+
+                        <div className="flex flex-wrap gap-2">
+                          <Badge variant="secondary">Tu voto: {movie.myScore}</Badge>
+                          <Badge variant="outline">Media actual: {movie.averageScore ?? '-'}</Badge>
+                        </div>
+
+                        {movie.pendingUsers && movie.pendingUsers.length > 0 ? (
+                          <div className="space-y-2">
+                            <p className="text-sm font-medium">Still pending from:</p>
+                            <div className="flex flex-wrap gap-2">
+                              {movie.pendingUsers.map((user: any) => (
+                                <Badge key={user.id} variant="outline">{user.name}</Badge>
+                              ))}
+                            </div>
+                          </div>
+                        ) : (
+                          <p className="text-sm text-muted-foreground">Todos han votado.</p>
+                        )}
+                      </div>
+                    </div>
+                  </CardContent>
+                </Card>
+              ))}
+            </div>
           )}
         </div>
       )}

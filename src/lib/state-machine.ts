@@ -1,6 +1,6 @@
 import { db } from '@/db';
 import { appState, movies, users, votes, vettingResponses } from '@/db/schema';
-import { eq, and, sql, count, lte, isNotNull } from 'drizzle-orm';
+import { eq, and, sql, count, lte, isNotNull, isNull, or } from 'drizzle-orm';
 
 // New phases: SUBMISSION -> movies in PROPOSED/VETTING/WATCHING/COMPLETED states can coexist
 // VETTING happens on schedule (e.g., every Monday) independent of voting completion
@@ -56,8 +56,16 @@ export async function submitMovie(userId: string, title: string, coverUrl?: stri
         return;
     }
 
+    const submissionWeekCondition = week > 0
+        ? eq(movies.weekNumber, week)
+        : or(isNull(movies.weekNumber), eq(movies.weekNumber, 0));
+
     const existing = await db.select().from(movies)
-        .where(and(eq(movies.proposedBy, userId), eq(movies.status, 'PROPOSED')))
+        .where(and(
+            eq(movies.proposedBy, userId),
+            eq(movies.status, 'PROPOSED'),
+            submissionWeekCondition
+        ))
         .get();
 
     if (existing) {
@@ -69,6 +77,7 @@ export async function submitMovie(userId: string, title: string, coverUrl?: stri
             coverUrl,
             proposedBy: userId,
             status: 'PROPOSED',
+            ...(week > 0 ? { weekNumber: week } : {}),
         });
     }
 
@@ -321,8 +330,7 @@ async function startNextVettingIfScheduled() {
 }
 
 export async function submitVote(userId: string, movieId: string, score: number) {
-    const { phase, week } = await getAppState();
-    if (phase !== 'ACTIVE') throw new Error('Not in active phase');
+    const { week } = await getAppState();
 
     // Check that the movie is in WATCHING status and its week has already
     // started (week <= current). This lets late voters finish past weeks

@@ -395,4 +395,62 @@ describe('State Machine: Weekly Guardrails', () => {
         expect(pendingLate).toHaveLength(1);
         expect(pendingLate[0].id).toBe(week2Movie.id);
     });
+
+    it('allows voting on past-week WATCHING movies while phase is SUBMISSION for replacement', async () => {
+        const db = getTestDb();
+        const user1 = createTestUser(db, { name: 'user1' });
+
+        setAppState(db, 'current_phase', 'SUBMISSION');
+        setAppState(db, 'current_week', '3');
+
+        const week2Watching = createTestMovie(db, {
+            proposedBy: user1.id,
+            status: 'WATCHING',
+            weekNumber: 2,
+        });
+
+        const { submitVote } = await loadStateMachine();
+        await submitVote(user1.id, week2Watching.id, 8);
+
+        const userVotes = db.select().from(votes)
+            .where(and(eq(votes.userId, user1.id), eq(votes.movieId, week2Watching.id)))
+            .all();
+
+        expect(userVotes).toHaveLength(1);
+        expect(userVotes[0].score).toBe(8);
+    });
+
+    it('does not treat old rejected movies as current-week replacement slots', async () => {
+        const db = getTestDb();
+        const user1 = createTestUser(db, { name: 'user1' });
+        createTestUser(db, { name: 'user2' });
+
+        setAppState(db, 'current_phase', 'SUBMISSION');
+        setAppState(db, 'current_week', '3');
+
+        createTestMovie(db, {
+            proposedBy: user1.id,
+            status: 'REJECTED',
+            weekNumber: 1,
+        });
+
+        const { submitMovie } = await loadStateMachine();
+        await submitMovie(user1.id, 'Week 3 candidate', 'https://example.com/week3.jpg');
+
+        const currentWeekVetting = db.select().from(movies).where(and(
+            eq(movies.proposedBy, user1.id),
+            eq(movies.status, 'VETTING'),
+            eq(movies.weekNumber, 3)
+        )).all();
+
+        const currentWeekProposed = db.select().from(movies).where(and(
+            eq(movies.proposedBy, user1.id),
+            eq(movies.status, 'PROPOSED'),
+            eq(movies.weekNumber, 3)
+        )).all();
+
+        expect(currentWeekVetting).toHaveLength(0);
+        expect(currentWeekProposed).toHaveLength(1);
+        expect(getAppStateValue(db, 'current_phase')).toBe('SUBMISSION');
+    });
 });
