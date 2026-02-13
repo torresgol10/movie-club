@@ -14,6 +14,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Plus, LogOut } from "lucide-react";
 import { useActionState } from 'react';
 import { createUserAction, logoutAction } from './actions';
+import { toast } from 'sonner';
 
 export default function Dashboard() {
   const [data, setData] = useState<any>(null);
@@ -24,6 +25,7 @@ export default function Dashboard() {
   const [ratings, setRatings] = useState<Record<string, number>>({});
   const [vettingMovie, setVettingMovie] = useState<any>(null);
   const [pendingVotes, setPendingVotes] = useState<any[]>([]);
+  const [votedVotes, setVotedVotes] = useState<any[]>([]);
   const [hasVetted, setHasVetted] = useState(false);
   const [pendingVetters, setPendingVetters] = useState<any[]>([]);
   const [createState, createAction, isCreating] = useActionState(createUserAction, null);
@@ -32,7 +34,7 @@ export default function Dashboard() {
   useEffect(() => {
     if (createState?.success) {
       setOpen(false);
-      alert('User created successfully!');
+      toast.success('User created successfully!');
     }
   }, [createState]);
 
@@ -63,11 +65,13 @@ export default function Dashboard() {
         const votesRes = await fetch('/api/votes');
         const votesJson = await votesRes.json();
         setPendingVotes(votesJson.pendingVotes || []);
+        setVotedVotes(votesJson.votedVotes || []);
       } else {
         setVettingMovie(null);
         setHasVetted(false);
         setPendingVetters([]);
         setPendingVotes([]);
+        setVotedVotes([]);
       }
     } catch (e) {
       console.error(e);
@@ -111,7 +115,7 @@ export default function Dashboard() {
       body: JSON.stringify({ movieId, score })
     });
     loadData();
-    alert('Vote Cast!');
+    toast.success('Vote cast!');
   }
 
   if (loading || !data) return <div className="flex min-h-screen items-center justify-center">Loading...</div>;
@@ -396,7 +400,54 @@ export default function Dashboard() {
             </div>
           )}
 
-          {!vettingMovie && pendingVotes.length === 0 && (
+          {votedVotes.length > 0 && (
+            <div className="space-y-4">
+              <h2 className="text-2xl font-bold">Votos enviados</h2>
+              <p className="text-muted-foreground">Seguimiento de media y votos pendientes</p>
+
+              {votedVotes.map((movie: any) => (
+                <Card key={movie.id}>
+                  <CardContent className="pt-6">
+                    <div className="flex flex-col md:flex-row gap-6">
+                      {movie.coverUrl && (
+                        <img
+                          src={movie.coverUrl}
+                          className="rounded-lg shadow-xl max-w-[150px]"
+                          alt={movie.title}
+                        />
+                      )}
+                      <div className="flex-1 space-y-4">
+                        <div>
+                          <h3 className="text-xl font-bold">{movie.title}</h3>
+                          <p className="text-sm text-muted-foreground">Week {movie.weekNumber}</p>
+                        </div>
+
+                        <div className="flex flex-wrap gap-2">
+                          <Badge variant="secondary">Tu voto: {movie.myScore}</Badge>
+                          <Badge variant="outline">Media actual: {movie.averageScore ?? '-'}</Badge>
+                        </div>
+
+                        {movie.pendingUsers && movie.pendingUsers.length > 0 ? (
+                          <div className="space-y-2">
+                            <p className="text-sm font-medium">Still pending from:</p>
+                            <div className="flex flex-wrap gap-2">
+                              {movie.pendingUsers.map((user: any) => (
+                                <Badge key={user.id} variant="outline">{user.name}</Badge>
+                              ))}
+                            </div>
+                          </div>
+                        ) : (
+                          <p className="text-sm text-muted-foreground">Todos han votado.</p>
+                        )}
+                      </div>
+                    </div>
+                  </CardContent>
+                </Card>
+              ))}
+            </div>
+          )}
+
+          {!vettingMovie && pendingVotes.length === 0 && votedVotes.length === 0 && (
             <Card>
               <CardContent className="pt-6 text-center text-muted-foreground">
                 <p>No pending actions. All caught up!</p>
