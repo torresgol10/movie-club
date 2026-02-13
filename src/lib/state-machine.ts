@@ -1,6 +1,6 @@
 import { db } from '@/db';
 import { appState, movies, users, votes, vettingResponses } from '@/db/schema';
-import { eq, and, sql, count, isNull } from 'drizzle-orm';
+import { eq, and, sql, count, lte, isNotNull } from 'drizzle-orm';
 
 // New phases: SUBMISSION -> movies in PROPOSED/VETTING/WATCHING/COMPLETED states can coexist
 // VETTING happens on schedule (e.g., every Monday) independent of voting completion
@@ -10,15 +10,70 @@ export async function getAppState() {
     const phaseRecord = await db.select().from(appState).where(eq(appState.key, 'current_phase')).get();
     const weekRecord = await db.select().from(appState).where(eq(appState.key, 'current_week')).get();
 
+    const phase = (phaseRecord?.value || 'SUBMISSION') as AppPhase;
+    let week = parseInt(weekRecord?.value || '0');
+
+    if (phase === 'ACTIVE') {
+        const now = new Date();
+        const scheduledWeekRes = await db.select({
+            value: sql<number>`coalesce(max(${movies.weekNumber}), 0)`
+        })
+            .from(movies)
+            .where(and(isNotNull(movies.vettingStartDate), lte(movies.vettingStartDate, now)))
+            .get();
+
+        const scheduledWeek = scheduledWeekRes?.value || 0;
+        const syncedWeek = Math.max(week, scheduledWeek);
+
+        if (syncedWeek !== week) {
+            await db.insert(appState).values({ key: 'current_week', value: String(syncedWeek) })
+                .onConflictDoUpdate({ target: appState.key, set: { value: String(syncedWeek) } });
+            week = syncedWeek;
+        }
+    }
+
     return {
-        phase: (phaseRecord?.value || 'SUBMISSION') as AppPhase,
-        week: parseInt(weekRecord?.value || '0'),
+        phase,
+        week,
     };
 }
 
 export async function submitMovie(userId: string, title: string, coverUrl?: string) {
-    const { phase } = await getAppState();
+    const { phase, week } = await getAppState();
     if (phase !== 'SUBMISSION') throw new Error('Not in submission phase');
+
+    const rejectedSlot = await db.select().from(movies)
+        .where(and(
+            eq(movies.proposedBy, userId),
+            eq(movies.status, 'REJECTED'),
+            eq(movies.weekNumber, week)
+        ))
+        .get();
+
+    if (rejectedSlot) {
+        const currentWeekVetting = await db.select().from(movies)
+            .where(and(eq(movies.status, 'VETTING'), eq(movies.weekNumber, week)))
+            .get();
+
+        if (currentWeekVetting) {
+            throw new Error('Current week already has a movie in vetting');
+        }
+
+        await db.insert(movies).values({
+            id: crypto.randomUUID(),
+            title,
+            coverUrl,
+            proposedBy: userId,
+            status: 'VETTING',
+            weekNumber: week,
+            vettingStartDate: new Date(),
+        });
+
+        await db.insert(appState).values({ key: 'current_phase', value: 'ACTIVE' })
+            .onConflictDoUpdate({ target: appState.key, set: { value: 'ACTIVE' } });
+
+        return;
+    }
 
     const existing = await db.select().from(movies)
         .where(and(eq(movies.proposedBy, userId), eq(movies.status, 'PROPOSED')))
@@ -81,15 +136,21 @@ async function scheduleMovies() {
 
 // Get movie currently in vetting phase
 export async function getVettingMovie() {
+    await startNextVettingIfScheduled();
+    const { week } = await getAppState();
+
     return await db.select().from(movies)
-        .where(eq(movies.status, 'VETTING'))
+        .where(and(eq(movies.status, 'VETTING'), eq(movies.weekNumber, week)))
+        .orderBy(movies.createdAt)
         .get();
 }
 
 // Get movies that are currently being watched (passed vetting)
 export async function getWatchingMovies() {
+    const { week } = await getAppState();
+
     return await db.select().from(movies)
-        .where(eq(movies.status, 'WATCHING'))
+        .where(and(eq(movies.status, 'WATCHING'), eq(movies.weekNumber, week)))
         .all();
 }
 
@@ -137,16 +198,7 @@ export async function submitVetting(userId: string, seen: boolean) {
         // Movie is rejected - mark as REJECTED and return to SUBMISSION for that slot
         await db.update(movies).set({ status: 'REJECTED' }).where(eq(movies.id, movie.id));
 
-        // Check if there are any other active movies, otherwise return to SUBMISSION phase
-        const activeMovies = await db.select().from(movies)
-            .where(and(
-                eq(movies.status, 'VETTING'),
-            ))
-            .all();
-
-        if (activeMovies.length === 0) {
-            await db.update(appState).set({ value: 'SUBMISSION' }).where(eq(appState.key, 'current_phase'));
-        }
+        await db.update(appState).set({ value: 'SUBMISSION' }).where(eq(appState.key, 'current_phase'));
     } else {
         // User hasn't seen it - record response
         await db.insert(vettingResponses).values({
@@ -165,22 +217,40 @@ export async function submitVetting(userId: string, seen: boolean) {
         if (notSeenCount >= allUsersCount) {
             // All users confirmed they haven't seen it - move to WATCHING
             await db.update(movies).set({ status: 'WATCHING' }).where(eq(movies.id, movie.id));
-
-            // Check if there's a next movie to start vetting
-            await startNextVettingIfScheduled();
         }
     }
 }
 
 // Check if the next movie should start vetting based on schedule
 async function startNextVettingIfScheduled() {
+    const { week } = await getAppState();
     const now = new Date();
+
+    const currentWeekInProgress = await db.select().from(movies)
+        .where(and(
+            eq(movies.weekNumber, week),
+            sql`${movies.status} IN ('VETTING', 'WATCHING')`
+        ))
+        .get();
+
+    if (currentWeekInProgress) {
+        return;
+    }
+
+    const anyVetting = await db.select().from(movies)
+        .where(eq(movies.status, 'VETTING'))
+        .get();
+
+    if (anyVetting) {
+        return;
+    }
 
     // Find the next movie that should be in vetting but isn't yet
     const nextMovie = await db.select().from(movies)
         .where(and(
             eq(movies.status, 'PROPOSED'),
-            sql`${movies.vettingStartDate} <= ${now.getTime()}`
+            eq(movies.weekNumber, week),
+            lte(movies.vettingStartDate, now)
         ))
         .orderBy(movies.weekNumber)
         .limit(1)
@@ -192,12 +262,16 @@ async function startNextVettingIfScheduled() {
 }
 
 export async function submitVote(userId: string, movieId: string, score: number) {
-    const { phase } = await getAppState();
+    const { phase, week } = await getAppState();
     if (phase !== 'ACTIVE') throw new Error('Not in active phase');
 
     // Check that the movie is in WATCHING status
     const movie = await db.select().from(movies)
-        .where(and(eq(movies.id, movieId), eq(movies.status, 'WATCHING')))
+        .where(and(
+            eq(movies.id, movieId),
+            eq(movies.status, 'WATCHING'),
+            eq(movies.weekNumber, week)
+        ))
         .get();
 
     if (!movie) throw new Error('Movie not available for voting');
@@ -229,6 +303,8 @@ export async function submitVote(userId: string, movieId: string, score: number)
     if (voteCount >= allUsersCount) {
         // All users voted - mark as COMPLETED
         await db.update(movies).set({ status: 'COMPLETED' }).where(eq(movies.id, movieId));
+
+        await startNextVettingIfScheduled();
 
         // Check if all movies in the batch are completed
         const anyActiveMovies = await db.select().from(movies)
