@@ -145,12 +145,15 @@ export async function getVettingMovie() {
         .get();
 }
 
-// Get movies that are currently being watched (passed vetting)
+// Get movies that are currently being watched (passed vetting).
+// Returns watching movies from current week AND previous weeks so users can
+// still vote on late movies, but never exposes future-week movies.
 export async function getWatchingMovies() {
     const { week } = await getAppState();
 
     return await db.select().from(movies)
-        .where(and(eq(movies.status, 'WATCHING'), eq(movies.weekNumber, week)))
+        .where(and(eq(movies.status, 'WATCHING'), lte(movies.weekNumber, week)))
+        .orderBy(movies.weekNumber)
         .all();
 }
 
@@ -265,12 +268,14 @@ export async function submitVote(userId: string, movieId: string, score: number)
     const { phase, week } = await getAppState();
     if (phase !== 'ACTIVE') throw new Error('Not in active phase');
 
-    // Check that the movie is in WATCHING status
+    // Check that the movie is in WATCHING status and its week has already
+    // started (week <= current). This lets late voters finish past weeks
+    // while preventing votes on future-week movies.
     const movie = await db.select().from(movies)
         .where(and(
             eq(movies.id, movieId),
             eq(movies.status, 'WATCHING'),
-            eq(movies.weekNumber, week)
+            lte(movies.weekNumber, week)
         ))
         .get();
 

@@ -1,20 +1,16 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth';
 import { db } from '@/db';
-import { movies, users, appState, votes } from '@/db/schema';
+import { movies, users, votes } from '@/db/schema';
 import { eq, and, ne } from 'drizzle-orm';
-import { submitMovie } from '@/lib/state-machine';
+import { submitMovie, getAppState } from '@/lib/state-machine';
 
 export async function GET(req: NextRequest) {
     const session = await getSession();
     if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
-    // Get current phase
-    const phaseRaw = await db.select().from(appState).where(eq(appState.key, 'current_phase')).limit(1);
-    const phase = phaseRaw[0]?.value || 'SUBMISSION';
-
-    const weekRaw = await db.select().from(appState).where(eq(appState.key, 'current_week')).limit(1);
-    const week = parseInt(weekRaw[0]?.value || '1');
+    // Use getAppState() so the week auto-advances based on the schedule
+    const { phase, week } = await getAppState();
 
     // Get my submission
     const mySubmission = await db.select().from(movies).where(and(
@@ -22,6 +18,12 @@ export async function GET(req: NextRequest) {
         ne(movies.status, 'COMPLETED'),
         ne(movies.status, 'REJECTED')
     )).limit(1);
+
+    // Rejected submission for the current week (so the user can re-submit)
+    const rejectedSubmission = await db.select().from(movies).where(and(
+        eq(movies.proposedBy, session.user.id),
+        eq(movies.status, 'REJECTED')
+    )).orderBy(movies.weekNumber).limit(1);
 
     // Get stats
     const allUsers = await db.select().from(users);
@@ -62,6 +64,7 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({
         state: { phase, week },
         mySubmission: mySubmission[0] || null,
+        rejectedSubmission: rejectedSubmission[0] || null,
         stats: {
             submitted: activeOrProposed.length,
             totalUsers: allUsers.length
