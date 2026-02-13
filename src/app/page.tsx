@@ -323,13 +323,25 @@ export default function Dashboard() {
                         )}
                       </div>
                     ) : (
-                      <div className="grid grid-cols-2 gap-4">
-                        <Button variant="secondary" onClick={() => submitVetting(false)} className="h-16">
-                          No, Never
-                        </Button>
-                        <Button variant="destructive" onClick={() => submitVetting(true)} className="h-16">
-                          Yes, I have
-                        </Button>
+                      <div className="space-y-3">
+                        <p className="text-sm text-muted-foreground">
+                          Si no la has visto, continúa a votación. Si la has visto, se rechaza esta propuesta.
+                        </p>
+                        <div className="grid grid-cols-2 gap-4">
+                          <Button variant="default" onClick={() => submitVetting(false)} className="h-16">
+                            No la he visto
+                          </Button>
+                          <Button
+                            variant="outline"
+                            onClick={() => submitVetting(true)}
+                            className="h-16 border-destructive text-destructive hover:bg-destructive/10"
+                          >
+                            Sí, la he visto
+                          </Button>
+                        </div>
+                        <p className="text-xs text-muted-foreground">
+                          La opción Sí, la he visto marca la película como rechazada.
+                        </p>
                       </div>
                     )}
                   </div>
