@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { eq, and, count } from 'drizzle-orm';
+import { eq, and } from 'drizzle-orm';
 import { getTestDb } from '../setup';
 import { createTestUser, createTestMovie, setAppState, createVettingResponse, createVote } from '../helpers';
 import { movies, votes, vettingResponses, users } from '@/db/schema';
@@ -65,7 +65,7 @@ describe('Use Case: Vetting must complete before voting is allowed', () => {
             const db = getTestDb();
             const user1 = createTestUser(db, { name: 'user1' });
             const user2 = createTestUser(db, { name: 'user2' });
-            const user3 = createTestUser(db, { name: 'user3' });
+            createTestUser(db, { name: 'user3' }); // exists in DB for total count
             setAppState(db, 'current_phase', 'ACTIVE');
             setAppState(db, 'current_week', '1');
 
@@ -137,7 +137,7 @@ describe('Use Case: Vetting must complete before voting is allowed', () => {
         it('should reject vote when no vetting responses exist', () => {
             const db = getTestDb();
             const user1 = createTestUser(db, { name: 'user1' });
-            const user2 = createTestUser(db, { name: 'user2' });
+            createTestUser(db, { name: 'user2' }); // exists in DB for total count
 
             const movie = createTestMovie(db, {
                 proposedBy: user1.id,
@@ -151,8 +151,8 @@ describe('Use Case: Vetting must complete before voting is allowed', () => {
         it('should reject vote when only partial vetting is done', () => {
             const db = getTestDb();
             const user1 = createTestUser(db, { name: 'user1' });
-            const user2 = createTestUser(db, { name: 'user2' });
-            const user3 = createTestUser(db, { name: 'user3' });
+            createTestUser(db, { name: 'user2' }); // exists in DB for total count
+            createTestUser(db, { name: 'user3' }); // exists in DB for total count
 
             const movie = createTestMovie(db, {
                 proposedBy: user1.id,
