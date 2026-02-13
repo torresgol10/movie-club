@@ -208,9 +208,17 @@ export async function getWatchingMovies() {
 // Get movies pending vote from a specific user
 export async function getPendingVotesForUser(userId: string) {
     const watchingMovies = await getWatchingMovies();
+    const allUsersCount = (await db.select({ value: count() }).from(users).get())?.value || 0;
     const pendingMovies = [];
 
     for (const movie of watchingMovies) {
+        // Ensure ALL users have completed vetting before allowing votes
+        const vettingCount = (await db.select({ value: count() }).from(vettingResponses)
+            .where(eq(vettingResponses.movieId, movie.id))
+            .get())?.value || 0;
+
+        if (vettingCount < allUsersCount) continue;
+
         const existingVote = await db.select().from(votes)
             .where(and(eq(votes.movieId, movie.id), eq(votes.userId, userId)))
             .get();
@@ -348,6 +356,16 @@ export async function submitVote(userId: string, movieId: string, score: number)
         .get();
 
     if (!movie) throw new Error('Movie not available for voting');
+
+    // Ensure ALL users have completed vetting before accepting votes
+    const allUsersCount = (await db.select({ value: count() }).from(users).get())?.value || 0;
+    const vettingCount = (await db.select({ value: count() }).from(vettingResponses)
+        .where(eq(vettingResponses.movieId, movieId))
+        .get())?.value || 0;
+
+    if (vettingCount < allUsersCount) {
+        throw new Error('Vetting not complete for this movie');
+    }
 
     // Check if user already voted
     const existing = await db.select().from(votes)

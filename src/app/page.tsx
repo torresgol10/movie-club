@@ -323,16 +323,6 @@ export default function Dashboard() {
                         <p className="text-sm text-muted-foreground animate-pulse">
                           ✓ Your response has been recorded
                         </p>
-                        {pendingVetters.length > 0 && (
-                          <div className="space-y-2">
-                            <p className="text-sm font-medium">Waiting for:</p>
-                            <div className="flex flex-wrap gap-2">
-                              {pendingVetters.map((user: any) => (
-                                <Badge key={user.id} variant="outline">{user.name}</Badge>
-                              ))}
-                            </div>
-                          </div>
-                        )}
                       </div>
                     ) : (
                       <div className="space-y-3">
