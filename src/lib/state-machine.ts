@@ -11,26 +11,7 @@ export async function getAppState() {
     const weekRecord = await db.select().from(appState).where(eq(appState.key, 'current_week')).get();
 
     const phase = (phaseRecord?.value || 'SUBMISSION') as AppPhase;
-    let week = parseInt(weekRecord?.value || '0');
-
-    if (phase === 'ACTIVE') {
-        const now = new Date();
-        const scheduledWeekRes = await db.select({
-            value: sql<number>`coalesce(max(${movies.weekNumber}), 0)`
-        })
-            .from(movies)
-            .where(and(isNotNull(movies.vettingStartDate), lte(movies.vettingStartDate, now)))
-            .get();
-
-        const scheduledWeek = scheduledWeekRes?.value || 0;
-        const syncedWeek = Math.max(week, scheduledWeek);
-
-        if (syncedWeek !== week) {
-            await db.insert(appState).values({ key: 'current_week', value: String(syncedWeek) })
-                .onConflictDoUpdate({ target: appState.key, set: { value: String(syncedWeek) } });
-            week = syncedWeek;
-        }
-    }
+    const week = parseInt(weekRecord?.value || '0');
 
     return {
         phase,
@@ -136,13 +117,67 @@ async function scheduleMovies() {
 
 // Get movie currently in vetting phase
 export async function getVettingMovie() {
-    await startNextVettingIfScheduled();
     const { week } = await getAppState();
 
     return await db.select().from(movies)
-        .where(and(eq(movies.status, 'VETTING'), eq(movies.weekNumber, week)))
+        .where(and(
+            eq(movies.weekNumber, week),
+            sql`${movies.status} IN ('VETTING', 'PROPOSED')`
+        ))
         .orderBy(movies.createdAt)
         .get();
+}
+
+// Intended to run from a scheduled job (cron), not from user read paths.
+// Syncs current_week with calendar and opens vetting for the scheduled week.
+export async function runWeeklyTransition() {
+    const { phase, week } = await getAppState();
+    if (phase !== 'ACTIVE') {
+        return { phase, previousWeek: week, currentWeek: week, promotedMovieId: null as string | null };
+    }
+
+    const now = new Date();
+    const scheduledWeekRes = await db.select({
+        value: sql<number>`coalesce(max(${movies.weekNumber}), 0)`
+    })
+        .from(movies)
+        .where(and(isNotNull(movies.vettingStartDate), lte(movies.vettingStartDate, now)))
+        .get();
+
+    const scheduledWeek = scheduledWeekRes?.value || week;
+    const targetWeek = Math.max(week, scheduledWeek);
+
+    if (targetWeek !== week) {
+        await db.insert(appState).values({ key: 'current_week', value: String(targetWeek) })
+            .onConflictDoUpdate({ target: appState.key, set: { value: String(targetWeek) } });
+    }
+
+    const anyVetting = await db.select().from(movies)
+        .where(eq(movies.status, 'VETTING'))
+        .get();
+
+    if (anyVetting) {
+        return { phase, previousWeek: week, currentWeek: targetWeek, promotedMovieId: null as string | null };
+    }
+
+    const scheduledMovie = await db.select().from(movies)
+        .where(and(
+            eq(movies.status, 'PROPOSED'),
+            eq(movies.weekNumber, targetWeek),
+            isNotNull(movies.vettingStartDate),
+            lte(movies.vettingStartDate, now)
+        ))
+        .orderBy(movies.weekNumber)
+        .limit(1)
+        .get();
+
+    if (!scheduledMovie) {
+        return { phase, previousWeek: week, currentWeek: targetWeek, promotedMovieId: null as string | null };
+    }
+
+    await db.update(movies).set({ status: 'VETTING' }).where(eq(movies.id, scheduledMovie.id));
+
+    return { phase, previousWeek: week, currentWeek: targetWeek, promotedMovieId: scheduledMovie.id };
 }
 
 // Get movies that are currently being watched (passed vetting).
@@ -224,43 +259,64 @@ export async function submitVetting(userId: string, seen: boolean) {
     }
 }
 
-// Check if the next movie should start vetting based on schedule
+// Check if the next movie should start vetting.
+// Two triggers: (1) the scheduled vettingStartDate has arrived, or
+// (2) the current week's movie already finished vetting (WATCHING/COMPLETED)
+//     so the group can move on early without waiting for the calendar date.
 async function startNextVettingIfScheduled() {
-    const { week } = await getAppState();
-    const now = new Date();
-
-    const currentWeekInProgress = await db.select().from(movies)
-        .where(and(
-            eq(movies.weekNumber, week),
-            sql`${movies.status} IN ('VETTING', 'WATCHING')`
-        ))
-        .get();
-
-    if (currentWeekInProgress) {
-        return;
-    }
-
+    // Never start a second concurrent vetting
     const anyVetting = await db.select().from(movies)
         .where(eq(movies.status, 'VETTING'))
         .get();
+    if (anyVetting) return;
 
-    if (anyVetting) {
-        return;
-    }
+    const { week } = await getAppState();
+    const now = new Date();
 
-    // Find the next movie that should be in vetting but isn't yet
-    const nextMovie = await db.select().from(movies)
+    // Path 1: a PROPOSED movie whose scheduled date has already passed
+    const scheduledMovie = await db.select().from(movies)
         .where(and(
             eq(movies.status, 'PROPOSED'),
-            eq(movies.weekNumber, week),
             lte(movies.vettingStartDate, now)
         ))
         .orderBy(movies.weekNumber)
         .limit(1)
         .get();
 
+    if (scheduledMovie) {
+        await db.update(movies).set({ status: 'VETTING' }).where(eq(movies.id, scheduledMovie.id));
+        return;
+    }
+
+    // Path 2: current week's movie already moved past vetting → start next early
+    const currentWeekPastVetting = await db.select().from(movies)
+        .where(and(
+            eq(movies.weekNumber, week),
+            sql`${movies.status} IN ('WATCHING', 'COMPLETED')`
+        ))
+        .get();
+
+    if (!currentWeekPastVetting) return;
+
+    const nextMovie = await db.select().from(movies)
+        .where(eq(movies.status, 'PROPOSED'))
+        .orderBy(movies.weekNumber)
+        .limit(1)
+        .get();
+
     if (nextMovie) {
-        await db.update(movies).set({ status: 'VETTING' }).where(eq(movies.id, nextMovie.id));
+        // Promote and stamp vettingStartDate so getAppState() stays consistent
+        await db.update(movies).set({
+            status: 'VETTING',
+            vettingStartDate: now
+        }).where(eq(movies.id, nextMovie.id));
+
+        // Advance the week counter to match the promoted movie
+        if (nextMovie.weekNumber && nextMovie.weekNumber > week) {
+            await db.insert(appState)
+                .values({ key: 'current_week', value: String(nextMovie.weekNumber) })
+                .onConflictDoUpdate({ target: appState.key, set: { value: String(nextMovie.weekNumber) } });
+        }
     }
 }
 

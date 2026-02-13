@@ -1,6 +1,9 @@
 import { SignJWT, jwtVerify } from 'jose';
 import { cookies } from 'next/headers';
 import { NextRequest, NextResponse } from 'next/server';
+import { db } from '@/db';
+import { users } from '@/db/schema';
+import { eq } from 'drizzle-orm';
 
 const secretKey = 'secret-key-CHANGE-ME'; // In production, use process.env.JWT_SECRET
 const key = new TextEncoder().encode(secretKey);
@@ -54,6 +57,25 @@ export async function getSession() {
     } catch (e) {
         return null;
     }
+}
+
+export async function getSessionUser() {
+    const session = await getSession();
+    if (!session?.user) return null;
+
+    const sessionUser = session.user as { id?: string; name?: string };
+
+    if (sessionUser.id) {
+        const userById = await db.select().from(users).where(eq(users.id, sessionUser.id)).get();
+        if (userById) return userById;
+    }
+
+    if (sessionUser.name) {
+        const userByName = await db.select().from(users).where(eq(users.name, sessionUser.name)).get();
+        if (userByName) return userByName;
+    }
+
+    return null;
 }
 
 export async function updateSession(request: NextRequest) {

@@ -1,16 +1,16 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth';
+import { getSessionUser } from '@/lib/auth';
 import { submitVote, getPendingVotesForUser, getUsersPendingVoteForMovie, getWatchingMovies } from '@/lib/state-machine';
 import { db } from '@/db';
 import { votes } from '@/db/schema';
 import { eq } from 'drizzle-orm';
 
 export async function GET(req: NextRequest) {
-    const session = await getSession();
-    if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    const sessionUser = await getSessionUser();
+    if (!sessionUser) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
     // Get movies pending vote for this user
-    const pendingMovies = await getPendingVotesForUser(session.user.id);
+    const pendingMovies = await getPendingVotesForUser(sessionUser.id);
 
     // For each pending movie, get the list of pending users
     const moviesWithPendingUsers = await Promise.all(
@@ -37,7 +37,7 @@ export async function GET(req: NextRequest) {
                 .where(eq(votes.movieId, movie.id))
                 .all();
 
-            const userVote = myVote.find((vote) => vote.userId === session.user.id);
+            const userVote = myVote.find((vote) => vote.userId === sessionUser.id);
             if (!userVote) return null;
 
             const pendingUsers = await getUsersPendingVoteForMovie(movie.id);
@@ -61,8 +61,8 @@ export async function GET(req: NextRequest) {
 }
 
 export async function POST(req: NextRequest) {
-    const session = await getSession();
-    if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    const sessionUser = await getSessionUser();
+    if (!sessionUser) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
     const { movieId, score } = await req.json();
 
@@ -71,7 +71,7 @@ export async function POST(req: NextRequest) {
     }
 
     try {
-        await submitVote(session.user.id, movieId, score);
+        await submitVote(sessionUser.id, movieId, score);
         return NextResponse.json({ success: true });
     } catch (error) {
         return NextResponse.json({ error: (error as Error).message }, { status: 400 });

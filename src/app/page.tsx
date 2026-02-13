@@ -64,8 +64,12 @@ export default function Dashboard() {
         // Fetch pending votes
         const votesRes = await fetch('/api/votes');
         const votesJson = await votesRes.json();
-        setPendingVotes(votesJson.pendingVotes || []);
-        setVotedVotes(votesJson.votedVotes || []);
+        const voted = votesJson.votedVotes || [];
+        const votedIds = new Set(voted.map((movie: any) => movie.id));
+        const pending = (votesJson.pendingVotes || []).filter((movie: any) => !votedIds.has(movie.id));
+
+        setPendingVotes(pending);
+        setVotedVotes(voted);
       } else {
         setVettingMovie(null);
         setHasVetted(false);
@@ -291,7 +295,7 @@ export default function Dashboard() {
           {vettingMovie && (
             <Card className="border-primary/50">
               <CardHeader>
-                <CardTitle>Movie Vetting - Week {state.week}</CardTitle>
+                <CardTitle>Movie Vetting - Week {vettingMovie.weekNumber ?? state.week}</CardTitle>
                 <CardDescription>Have you seen this movie before?</CardDescription>
               </CardHeader>
               <CardContent className="space-y-4">

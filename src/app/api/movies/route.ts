@@ -1,27 +1,27 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth';
+import { getSessionUser } from '@/lib/auth';
 import { db } from '@/db';
 import { movies, users, votes } from '@/db/schema';
 import { eq, and, ne } from 'drizzle-orm';
 import { submitMovie, getAppState } from '@/lib/state-machine';
 
 export async function GET(req: NextRequest) {
-    const session = await getSession();
-    if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    const sessionUser = await getSessionUser();
+    if (!sessionUser) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
     // Use getAppState() so the week auto-advances based on the schedule
     const { phase, week } = await getAppState();
 
     // Get my submission
     const mySubmission = await db.select().from(movies).where(and(
-        eq(movies.proposedBy, session.user.id),
+        eq(movies.proposedBy, sessionUser.id),
         ne(movies.status, 'COMPLETED'),
         ne(movies.status, 'REJECTED')
     )).limit(1);
 
     // Rejected submission for the current week (so the user can re-submit)
     const rejectedSubmission = await db.select().from(movies).where(and(
-        eq(movies.proposedBy, session.user.id),
+        eq(movies.proposedBy, sessionUser.id),
         eq(movies.status, 'REJECTED')
     )).orderBy(movies.weekNumber).limit(1);
 
@@ -32,7 +32,7 @@ export async function GET(req: NextRequest) {
     const rawQueue = await db.select().from(movies).where(eq(movies.status, 'PROPOSED'));
 
     const queue = rawQueue.map(m => {
-        if (m.proposedBy === session.user.id) return m;
+        if (m.proposedBy === sessionUser.id) return m;
 
         return {
             ...m,
@@ -75,13 +75,13 @@ export async function GET(req: NextRequest) {
 }
 
 export async function POST(req: NextRequest) {
-    const session = await getSession();
-    if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    const sessionUser = await getSessionUser();
+    if (!sessionUser) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
     const { title, coverUrl } = await req.json();
 
     try {
-        await submitMovie(session.user.id, title, coverUrl);
+        await submitMovie(sessionUser.id, title, coverUrl);
         return NextResponse.json({ success: true });
     } catch (error) {
         return NextResponse.json({ error: (error as Error).message }, { status: 400 });
