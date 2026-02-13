@@ -420,7 +420,7 @@ describe('State Machine: Weekly Guardrails', () => {
         expect(userVotes[0].score).toBe(8);
     });
 
-    it('does not treat old rejected movies as current-week replacement slots', async () => {
+    it('does not allow replacement submission when rejection is from an old week', async () => {
         const db = getTestDb();
         const user1 = createTestUser(db, { name: 'user1' });
         createTestUser(db, { name: 'user2' });
@@ -435,22 +435,29 @@ describe('State Machine: Weekly Guardrails', () => {
         });
 
         const { submitMovie } = await loadStateMachine();
-        await submitMovie(user1.id, 'Week 3 candidate', 'https://example.com/week3.jpg');
+        await expect(
+            submitMovie(user1.id, 'Week 3 candidate', 'https://example.com/week3.jpg')
+        ).rejects.toThrow('No replacement required for this user');
+    });
 
-        const currentWeekVetting = db.select().from(movies).where(and(
-            eq(movies.proposedBy, user1.id),
-            eq(movies.status, 'VETTING'),
-            eq(movies.weekNumber, 3)
-        )).all();
+    it('blocks replacement submission for users without current-week rejection', async () => {
+        const db = getTestDb();
+        const owner = createTestUser(db, { name: 'owner' });
+        const otherUser = createTestUser(db, { name: 'other-user' });
 
-        const currentWeekProposed = db.select().from(movies).where(and(
-            eq(movies.proposedBy, user1.id),
-            eq(movies.status, 'PROPOSED'),
-            eq(movies.weekNumber, 3)
-        )).all();
+        setAppState(db, 'current_phase', 'SUBMISSION');
+        setAppState(db, 'current_week', '3');
 
-        expect(currentWeekVetting).toHaveLength(0);
-        expect(currentWeekProposed).toHaveLength(1);
-        expect(getAppStateValue(db, 'current_phase')).toBe('SUBMISSION');
+        createTestMovie(db, {
+            proposedBy: owner.id,
+            status: 'REJECTED',
+            weekNumber: 3,
+        });
+
+        const { submitMovie } = await loadStateMachine();
+
+        await expect(
+            submitMovie(otherUser.id, 'Should fail', 'https://example.com/fail.jpg')
+        ).rejects.toThrow('No replacement required for this user');
     });
 });

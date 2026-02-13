@@ -123,6 +123,7 @@ export default function Dashboard() {
   if (loading || !data) return <div className="flex min-h-screen items-center justify-center">Loading...</div>;
 
   const { state, mySubmission, stats } = data;
+  const canSubmitInSubmission = state.phase === 'SUBMISSION' && (state.week === 0 || Boolean(data.rejectedSubmission));
 
   return (
     <div className="container max-w-4xl mx-auto p-4 space-y-8 min-h-screen pb-20">
@@ -213,7 +214,7 @@ export default function Dashboard() {
               </Card>
             )}
 
-            {!mySubmission ? (
+            {canSubmitInSubmission ? (!mySubmission ? (
               <Card className="w-full">
                 <CardHeader>
                   <CardTitle>Your Proposal</CardTitle>
@@ -250,6 +251,15 @@ export default function Dashboard() {
                 <CardContent className="text-center space-y-4">
                   <p className="text-3xl font-bold text-primary">{mySubmission.title}</p>
                   <p className="text-muted-foreground">Waiting for other members...</p>
+                </CardContent>
+              </Card>
+            )) : (
+              <Card className="w-full border-primary/50 bg-primary/5">
+                <CardHeader>
+                  <CardTitle className="text-center">Waiting for replacement</CardTitle>
+                </CardHeader>
+                <CardContent className="text-center space-y-4">
+                  <p className="text-muted-foreground">A member is choosing a replacement movie for this week.</p>
                 </CardContent>
               </Card>
             )}

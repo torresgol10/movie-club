@@ -31,6 +31,10 @@ export async function submitMovie(userId: string, title: string, coverUrl?: stri
         ))
         .get();
 
+    if (week > 0 && !rejectedSlot) {
+        throw new Error('No replacement required for this user');
+    }
+
     if (rejectedSlot) {
         const currentWeekVetting = await db.select().from(movies)
             .where(and(eq(movies.status, 'VETTING'), eq(movies.weekNumber, week)))
