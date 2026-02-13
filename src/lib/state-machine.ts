@@ -386,7 +386,6 @@ export async function submitVote(userId: string, movieId: string, score: number)
     }
 
     // Check if all users have voted on this movie
-    const allUsersCount = (await db.select({ value: count() }).from(users).get())?.value || 0;
     const voteCount = (await db.select({ value: count() }).from(votes)
         .where(eq(votes.movieId, movieId))
         .get())?.value || 0;
