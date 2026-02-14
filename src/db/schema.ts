@@ -47,6 +47,16 @@ export const appState = sqliteTable('app_state', {
     value: text('value'),
 });
 
+// Push Subscriptions
+export const pushSubscriptions = sqliteTable('push_subscriptions', {
+    id: text('id').primaryKey(),
+    userId: text('user_id').references(() => users.id),
+    endpoint: text('endpoint').notNull(),
+    p256dh: text('p256dh').notNull(),
+    auth: text('auth').notNull(),
+    createdAt: integer('created_at', { mode: 'timestamp' }).default(sql`CURRENT_TIMESTAMP`),
+});
+
 // Vetting Responses
 export const vettingResponses = sqliteTable('vetting_responses', {
     id: text('id').primaryKey(),

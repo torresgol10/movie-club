@@ -15,6 +15,7 @@ import { Plus, LogOut } from "lucide-react";
 import { useActionState } from 'react';
 import { createUserAction, logoutAction } from './actions';
 import { toast } from 'sonner';
+import PushNotificationManager from '@/components/PushNotificationManager';
 
 export default function Dashboard() {
   const [data, setData] = useState<any>(null);
@@ -132,10 +133,11 @@ export default function Dashboard() {
           <img src="/sala404.svg" alt="Sala 404" className="h-12 w-auto" />
         </div>
         <div className="flex items-center gap-2">
+          <PushNotificationManager />
           <Dialog open={open} onOpenChange={setOpen}>
             <DialogTrigger asChild>
-              <Button variant="outline" size="sm">
-                <Plus className="mr-2 h-4 w-4" /> Add Member
+              <Button variant="outline" size="icon" title="Add Member">
+                <Plus className="h-4 w-4" />
               </Button>
             </DialogTrigger>
             <DialogContent className="sm:max-w-[425px]">

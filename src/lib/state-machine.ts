@@ -1,6 +1,7 @@
 import { db } from '@/db';
 import { appState, movies, users, votes, vettingResponses } from '@/db/schema';
 import { eq, and, sql, count, lte, isNotNull, isNull, or } from 'drizzle-orm';
+import { notifyNewVettingMovie, notifyMovieCompleted } from './push';
 
 // New phases: SUBMISSION -> movies in PROPOSED/VETTING/WATCHING/COMPLETED states can coexist
 // VETTING happens on schedule (e.g., every Monday) independent of voting completion
@@ -57,6 +58,9 @@ export async function submitMovie(userId: string, title: string, coverUrl?: stri
         await db.insert(appState).values({ key: 'current_phase', value: 'ACTIVE' })
             .onConflictDoUpdate({ target: appState.key, set: { value: 'ACTIVE' } });
 
+        // Notify all users about the replacement movie in vetting
+        notifyNewVettingMovie(title).catch(() => {});
+
         return;
     }
 
@@ -106,11 +110,13 @@ async function scheduleMovies() {
     nextMonday.setDate(now.getDate() + ((1 + 7 - now.getDay()) % 7 || 7));
     nextMonday.setHours(0, 0, 0, 0);
 
+    let firstMovieTitle = '';
     for (let i = 0; i < shuffled.length; i++) {
         const vettingDate = new Date(nextMonday);
         vettingDate.setDate(nextMonday.getDate() + (i * 7)); // Each movie gets vetting one week apart
 
         const movieStatus = i === 0 ? 'VETTING' : 'PROPOSED';  // First movie starts vetting immediately
+        if (i === 0) firstMovieTitle = shuffled[i].title;
 
         await db.update(movies)
             .set({
@@ -119,6 +125,11 @@ async function scheduleMovies() {
                 vettingStartDate: vettingDate
             })
             .where(eq(movies.id, shuffled[i].id));
+    }
+
+    // Notify all users about the first movie entering vetting
+    if (firstMovieTitle) {
+        notifyNewVettingMovie(firstMovieTitle).catch(() => {});
     }
 
     await db.insert(appState).values({ key: 'current_phase', value: 'ACTIVE' })
@@ -189,6 +200,9 @@ export async function runWeeklyTransition() {
     }
 
     await db.update(movies).set({ status: 'VETTING' }).where(eq(movies.id, scheduledMovie.id));
+
+    // Notify all users about the new vetting movie
+    notifyNewVettingMovie(scheduledMovie.title).catch(() => {});
 
     return { phase, previousWeek: week, currentWeek: targetWeek, promotedMovieId: scheduledMovie.id };
 }
@@ -306,6 +320,7 @@ async function startNextVettingIfScheduled() {
 
     if (scheduledMovie) {
         await db.update(movies).set({ status: 'VETTING' }).where(eq(movies.id, scheduledMovie.id));
+        notifyNewVettingMovie(scheduledMovie.title).catch(() => {});
         return;
     }
 
@@ -331,6 +346,8 @@ async function startNextVettingIfScheduled() {
             status: 'VETTING',
             vettingStartDate: now
         }).where(eq(movies.id, nextMovie.id));
+
+        notifyNewVettingMovie(nextMovie.title).catch(() => {});
 
         // Advance the week counter to match the promoted movie
         if (nextMovie.weekNumber && nextMovie.weekNumber > week) {
@@ -393,6 +410,11 @@ export async function submitVote(userId: string, movieId: string, score: number)
     if (voteCount >= allUsersCount) {
         // All users voted - mark as COMPLETED
         await db.update(movies).set({ status: 'COMPLETED' }).where(eq(movies.id, movieId));
+
+        // Calculate average score and notify everyone
+        const allVotes = await db.select().from(votes).where(eq(votes.movieId, movieId)).all();
+        const avgScore = allVotes.reduce((sum, v) => sum + (v.score || 0), 0) / allVotes.length;
+        notifyMovieCompleted(movie.title, avgScore).catch(() => {});
 
         await startNextVettingIfScheduled();
 
