@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { and, eq } from 'drizzle-orm';
 import { getTestDb } from '../setup';
-import { createTestMovie, createTestUser, getAppStateValue, setAppState } from '../helpers';
+import { createTestMovie, createTestUser, createVettingResponse, getAppStateValue, setAppState } from '../helpers';
 import { appState, movies, votes } from '@/db/schema';
 
 async function loadStateMachine() {
@@ -137,6 +137,10 @@ describe('State Machine: Weekly Guardrails', () => {
             vettingStartDate: new Date(Date.now() - 86400000),
         });
 
+        // All users completed vetting for week 1
+        createVettingResponse(db, week1Movie.id, user1.id);
+        createVettingResponse(db, week1Movie.id, user2.id);
+
         const week2Movie = createTestMovie(db, {
             proposedBy: user2.id,
             status: 'PROPOSED',
@@ -211,6 +215,9 @@ describe('State Machine: Weekly Guardrails', () => {
             status: 'WATCHING',
             weekNumber: 1,
         });
+
+        // All users completed vetting for past-week movie
+        createVettingResponse(db, pastWeekMovie.id, user1.id);
 
         // Future-week movie (week 3, current is 2) -> should be rejected
         const futureWeekMovie = createTestMovie(db, {
@@ -296,6 +303,10 @@ describe('State Machine: Weekly Guardrails', () => {
             vettingStartDate: new Date(Date.now() - 14 * 86400000),
         });
 
+        // All users completed vetting for week 1
+        createVettingResponse(db, week1Movie.id, user1.id);
+        createVettingResponse(db, week1Movie.id, user2.id);
+
         // Week 2 movie: its vettingStartDate has already passed (new week started)
         const week2Movie = createTestMovie(db, {
             proposedBy: user2.id,
@@ -334,7 +345,7 @@ describe('State Machine: Weekly Guardrails', () => {
         expect(completed.status).toBe('COMPLETED');
     });
 
-    it('3-week scenario: week2 WATCHING + week3 date NOT arrived → no promotion before cron schedule', async () => {
+    it('3-week scenario: week2 WATCHING + cron promotes week3 early via Path 2', async () => {
         const db = getTestDb();
         const user1 = createTestUser(db, { name: 'late-voter' });
         const user2 = createTestUser(db, { name: 'up-to-date' });
@@ -359,12 +370,17 @@ describe('State Machine: Weekly Guardrails', () => {
             vettingStartDate: new Date(Date.now() - 14 * 86400000),
         });
 
+        // All users completed vetting for week 2
+        createVettingResponse(db, week2Movie.id, user1.id);
+        createVettingResponse(db, week2Movie.id, user2.id);
+        createVettingResponse(db, week2Movie.id, user3.id);
+
         // user2 and user3 already voted on week 2
         db.insert(votes).values({ id: crypto.randomUUID(), userId: user2.id, movieId: week2Movie.id, score: 7 }).run();
         db.insert(votes).values({ id: crypto.randomUUID(), userId: user3.id, movieId: week2Movie.id, score: 8 }).run();
 
         // Week 3: PROPOSED — vettingStartDate is in the FUTURE
-        createTestMovie(db, {
+        const week3Movie = createTestMovie(db, {
             proposedBy: user3.id,
             status: 'PROPOSED',
             weekNumber: 3,
@@ -381,12 +397,16 @@ describe('State Machine: Weekly Guardrails', () => {
         const vetting = await getVettingMovie();
         expect(vetting).toBeUndefined();
 
-        // Cron run should also keep week at 2 because week 3 schedule is still in the future
+        // Cron run: week 2 is WATCHING so Path 2 promotes week 3 early and advances week
         await runWeeklyTransition();
         const weekVal = db.select().from(appState).where(eq(appState.key, 'current_week')).all()[0];
-        expect(weekVal.value).toBe('2');
+        expect(weekVal.value).toBe('3');
 
-        // Up-to-date user: no pending votes
+        // Week 3 movie is now in VETTING
+        const promoted = db.select().from(movies).where(eq(movies.id, week3Movie.id)).all()[0];
+        expect(promoted.status).toBe('VETTING');
+
+        // Up-to-date user: no pending votes (vetting for week 3 not done yet)
         const pendingUpToDate = await getPendingVotesForUser(user2.id);
         expect(pendingUpToDate).toHaveLength(0);
 
@@ -408,6 +428,9 @@ describe('State Machine: Weekly Guardrails', () => {
             status: 'WATCHING',
             weekNumber: 2,
         });
+
+        // All users completed vetting for this movie
+        createVettingResponse(db, week2Watching.id, user1.id);
 
         const { submitVote } = await loadStateMachine();
         await submitVote(user1.id, week2Watching.id, 8);
@@ -459,5 +482,66 @@ describe('State Machine: Weekly Guardrails', () => {
         await expect(
             submitMovie(otherUser.id, 'Should fail', 'https://example.com/fail.jpg')
         ).rejects.toThrow('No replacement required for this user');
+    });
+
+    it('cron promotes next movie while previous week is still being voted on', async () => {
+        const db = getTestDb();
+        const user1 = createTestUser(db, { name: 'user1' });
+        const user2 = createTestUser(db, { name: 'user2' });
+        const user3 = createTestUser(db, { name: 'user3' });
+
+        setAppState(db, 'current_phase', 'ACTIVE');
+        setAppState(db, 'current_week', '1');
+
+        // Week 1: WATCHING with only 1/3 votes (still being voted on)
+        const week1Movie = createTestMovie(db, {
+            proposedBy: user1.id,
+            status: 'WATCHING',
+            weekNumber: 1,
+            vettingStartDate: new Date(Date.now() - 14 * 86400000),
+        });
+
+        createVettingResponse(db, week1Movie.id, user1.id);
+        createVettingResponse(db, week1Movie.id, user2.id);
+        createVettingResponse(db, week1Movie.id, user3.id);
+
+        // Only user1 voted so far
+        db.insert(votes).values({ id: crypto.randomUUID(), userId: user1.id, movieId: week1Movie.id, score: 7 }).run();
+
+        // Week 2: PROPOSED, date not yet arrived
+        const week2Movie = createTestMovie(db, {
+            proposedBy: user2.id,
+            status: 'PROPOSED',
+            weekNumber: 2,
+            vettingStartDate: new Date(Date.now() + 5 * 86400000),
+        });
+
+        const { runWeeklyTransition, getVettingMovie, getPendingVotesForUser, submitVote } = await loadStateMachine();
+
+        // Cron runs: week 1 is WATCHING → Path 2 promotes week 2 and advances week
+        const result = await runWeeklyTransition();
+        expect(result.currentWeek).toBe(2);
+        expect(result.promotedMovieId).toBe(week2Movie.id);
+
+        // Week 2 is now in VETTING
+        const vetting = await getVettingMovie();
+        expect(vetting?.id).toBe(week2Movie.id);
+        expect(vetting?.status).toBe('VETTING');
+
+        // Users can still vote on week 1 movie
+        const pending = await getPendingVotesForUser(user2.id);
+        expect(pending).toHaveLength(1);
+        expect(pending[0].id).toBe(week1Movie.id);
+
+        await submitVote(user2.id, week1Movie.id, 8);
+        await submitVote(user3.id, week1Movie.id, 6);
+
+        // After all 3 users voted, week 1 is COMPLETED
+        const completed = db.select().from(movies).where(eq(movies.id, week1Movie.id)).all()[0];
+        expect(completed.status).toBe('COMPLETED');
+
+        // Week 2 remains in VETTING (not replaced)
+        const stillVetting = db.select().from(movies).where(eq(movies.id, week2Movie.id)).all()[0];
+        expect(stillVetting.status).toBe('VETTING');
     });
 });

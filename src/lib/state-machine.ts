@@ -184,6 +184,7 @@ export async function runWeeklyTransition() {
         return { phase, previousWeek: week, currentWeek: targetWeek, promotedMovieId: null as string | null };
     }
 
+    // Path 1: promote a PROPOSED movie whose scheduled vettingStartDate has arrived
     const scheduledMovie = await db.select().from(movies)
         .where(and(
             eq(movies.status, 'PROPOSED'),
@@ -195,16 +196,50 @@ export async function runWeeklyTransition() {
         .limit(1)
         .get();
 
-    if (!scheduledMovie) {
-        return { phase, previousWeek: week, currentWeek: targetWeek, promotedMovieId: null as string | null };
+    if (scheduledMovie) {
+        await db.update(movies).set({ status: 'VETTING' }).where(eq(movies.id, scheduledMovie.id));
+        notifyNewVettingMovie(scheduledMovie.title).catch(() => {});
+        return { phase, previousWeek: week, currentWeek: targetWeek, promotedMovieId: scheduledMovie.id };
     }
 
-    await db.update(movies).set({ status: 'VETTING' }).where(eq(movies.id, scheduledMovie.id));
+    // Path 2: current week's movie already passed vetting (WATCHING/COMPLETED)
+    // → promote next PROPOSED movie early so each cron Monday opens a new week
+    const currentWeekPastVetting = await db.select().from(movies)
+        .where(and(
+            eq(movies.weekNumber, targetWeek),
+            sql`${movies.status} IN ('WATCHING', 'COMPLETED')`
+        ))
+        .get();
 
-    // Notify all users about the new vetting movie
-    notifyNewVettingMovie(scheduledMovie.title).catch(() => {});
+    if (currentWeekPastVetting) {
+        const nextMovie = await db.select().from(movies)
+            .where(eq(movies.status, 'PROPOSED'))
+            .orderBy(movies.weekNumber)
+            .limit(1)
+            .get();
 
-    return { phase, previousWeek: week, currentWeek: targetWeek, promotedMovieId: scheduledMovie.id };
+        if (nextMovie) {
+            await db.update(movies).set({
+                status: 'VETTING',
+                vettingStartDate: now
+            }).where(eq(movies.id, nextMovie.id));
+
+            notifyNewVettingMovie(nextMovie.title).catch(() => {});
+
+            // Advance week counter to match promoted movie
+            if (nextMovie.weekNumber && nextMovie.weekNumber > targetWeek) {
+                await db.insert(appState)
+                    .values({ key: 'current_week', value: String(nextMovie.weekNumber) })
+                    .onConflictDoUpdate({ target: appState.key, set: { value: String(nextMovie.weekNumber) } });
+
+                return { phase, previousWeek: week, currentWeek: nextMovie.weekNumber, promotedMovieId: nextMovie.id };
+            }
+
+            return { phase, previousWeek: week, currentWeek: targetWeek, promotedMovieId: nextMovie.id };
+        }
+    }
+
+    return { phase, previousWeek: week, currentWeek: targetWeek, promotedMovieId: null as string | null };
 }
 
 // Get movies that are currently being watched (passed vetting).
